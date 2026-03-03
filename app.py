@@ -106,8 +106,12 @@ def generate_pdf_report(df_rekap, pdf_path):
 # ==========================================
 # FUNGSI MODUL RANDOM SAMPLING
 # ==========================================
-def get_random_points_gdf(gdf, n_points, epsg_code):
-    """Mencari titik acak yang jatuh TEPAT DI DALAM poligon shapefile secara efisien"""
+def get_random_points_gdf(gdf, n_points, epsg_code, is_background=False):
+    """
+    Mencari titik acak di dalam poligon shapefile.
+    is_background=False -> Kerusakan: Hanya 1 sampel per Poligon ID unik. (Max n_points)
+    is_background=True  -> Area Sehat: Boleh banyak titik di dalam 1 Poligon raksasa.
+    """
     gdf = gdf.to_crs(epsg=epsg_code)
     gdf = gdf[~gdf.geometry.is_empty & gdf.geometry.is_valid]
     points = []
@@ -115,17 +119,39 @@ def get_random_points_gdf(gdf, n_points, epsg_code):
     if gdf.empty: return []
 
     geometries = gdf.geometry.tolist()
-    attempts = 0
-    max_attempts = n_points * 200 # Batas aman loop
     
-    while len(points) < n_points and attempts < max_attempts:
-        poly = random.choice(geometries)
-        minx, miny, maxx, maxy = poly.bounds
-        p = Point(random.uniform(minx, maxx), random.uniform(miny, maxy))
-        if poly.contains(p):
-            points.append(p)
-        attempts += 1
+    if is_background:
+        # Jika Area Sehat: Boleh mengulang poligon yang sama agar target sampel (n_points) tercapai
+        attempts = 0
+        max_attempts = n_points * 200 # Batas aman loop
         
+        while len(points) < n_points and attempts < max_attempts:
+            poly = random.choice(geometries)
+            minx, miny, maxx, maxy = poly.bounds
+            p = Point(random.uniform(minx, maxx), random.uniform(miny, maxy))
+            if poly.contains(p):
+                points.append(p)
+            attempts += 1
+            
+    else:
+        # Jika Kerusakan: 1 Sampel = 1 Poligon (Unique).
+        # Tentukan target sampel berdasarkan ketersediaan poligon. Jika minta 50 tapi poligon ada 4, ambil 4.
+        target_n = min(n_points, len(geometries))
+        
+        # Pilih secara acak poligon tanpa duplikasi
+        selected_polys = random.sample(geometries, target_n)
+        
+        for poly in selected_polys:
+            minx, miny, maxx, maxy = poly.bounds
+            poly_attempts = 0
+            # Usaha mencari 1 titik acak TEPAT di dalam poligon tersebut
+            while poly_attempts < 100: 
+                p = Point(random.uniform(minx, maxx), random.uniform(miny, maxy))
+                if poly.contains(p):
+                    points.append(p)
+                    break # Berhasil dapat 1, lanjut ke poligon/ID berikutnya
+                poly_attempts += 1
+                
     return points
 
 def get_random_points_raster(raster_path, n_points, epsg_code):
@@ -156,7 +182,7 @@ def get_random_points_raster(raster_path, n_points, epsg_code):
     return []
 
 def assign_deteksi_class(class_name):
-    """Mapping atribut kelas sesuai ketentuan VB Script Field Calculator"""
+    """Mapping atribut kelas ke integer ID untuk Field Calculator"""
     mapping = {
         "Alligator Crack": 1,
         "Edge Crack": 2,
@@ -302,11 +328,11 @@ if menu == "📏 Ekstraksi Geometri Kerusakan":
 # ==========================================
 elif menu == "🎯 Random Sampling (Ground Truth)":
     st.subheader("Modul Generator Sampel Acak")
-    st.info("Pilih jumlah sampel yang diinginkan. Sistem akan secara otomatis menambahkan kolom atribut [deteksi] dan [aktual] untuk kemudahan validasi di QGIS/ArcGIS.")
+    st.info("Pilih jumlah titik maksimal per kelas. Jika jumlah fitur poligon kurang dari target, sistem hanya akan mengambil 1 sampel di setiap poligon yang ada untuk mencegah redudansi/kebocoran data validasi.")
     
     if 'sampling_selesai' not in st.session_state: st.session_state.sampling_selesai = False
 
-    n_samples = st.number_input("Tentukan Jumlah Sampel Titik per Kelas", min_value=1, max_value=1000, value=50, step=10)
+    n_samples = st.number_input("Tentukan Target Maksimal Sampel Titik per Kelas", min_value=1, max_value=1000, value=50, step=10)
     
     col_samp1, col_samp2 = st.columns([1.5, 1])
     with col_samp1:
@@ -350,18 +376,19 @@ elif menu == "🎯 Random Sampling (Ground Truth)":
             "Rutting": file_rt_s
         }
         
-        with st.spinner(f"Mencari titik acak untuk Ground Truth Validation..."):
+        with st.spinner(f"Mengekstrak maksimal {n_samples} sampel unik (1 per poligon) untuk Ground Truth..."):
             with tempfile.TemporaryDirectory() as tmpdir:
                 try:
                     kumpulan_titik = []
                     
-                    # 1. Proses Vector / Kerusakan
+                    # 1. Proses Vector / Kerusakan (Maks 1 sampel per poligon)
                     for jenis, file in konfigurasi_sampling.items():
                         if file is not None:
                             gdf = read_zip_shapefile(file, tmpdir)
                             if gdf is not None and not gdf.empty:
                                 if gdf.crs is None: gdf.set_crs(epsg=4326, inplace=True)
-                                points = get_random_points_gdf(gdf, n_samples, epsg_code)
+                                # is_background=False: memastikan 1 poligon unik hanya dapat 1 titik
+                                points = get_random_points_gdf(gdf, n_samples, epsg_code, is_background=False)
                                 for p in points:
                                     kumpulan_titik.append({"Class": jenis, "geometry": p})
 
@@ -371,7 +398,8 @@ elif menu == "🎯 Random Sampling (Ground Truth)":
                         if aoi_bg_file is not None:
                             aoi_gdf = read_zip_shapefile(aoi_bg_file, tmpdir)
                             if aoi_gdf is not None and not aoi_gdf.empty:
-                                points_bg = get_random_points_gdf(aoi_gdf, n_samples, epsg_code)
+                                # is_background=True: titik boleh bergerombol menuhin N titik walau hanya di 1-2 poligon besar
+                                points_bg = get_random_points_gdf(aoi_gdf, n_samples, epsg_code, is_background=True)
                     else:
                         is_ortho_valid = (ortho_mode == "Upload File .tif" and ortho_file is not None) or (ortho_mode == "Paste Link Google Drive" and ortho_link != "")
                         if is_ortho_valid:

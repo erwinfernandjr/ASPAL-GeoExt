@@ -483,11 +483,12 @@ elif menu == "📊 Evaluasi Akurasi (Confusion Matrix)":
     
     if 'eval_selesai' not in st.session_state: st.session_state.eval_selesai = False
 
-    file_eval = st.file_uploader("Upload File Excel (.xlsx)", type=["xlsx"])
+    # Izinkan xls dan xlsx
+    file_eval = st.file_uploader("Upload File Excel (.xls, .xlsx)", type=["xls", "xlsx"])
     
     if st.button("🎯 Proses Evaluasi Data", type="primary", use_container_width=True):
         if file_eval is not None:
-            with st.spinner("Menghitung metrik dan membuat visualisasi..."):
+            with st.spinner("Menghitung metrik geospasial dan membuat visualisasi..."):
                 try:
                     df = pd.read_excel(file_eval)
                     
@@ -512,12 +513,23 @@ elif menu == "📊 Evaluasi Akurasi (Confusion Matrix)":
                     unique_classes = sorted(list(set(df_clean['aktual'].dropna()) | set(df_clean['deteksi'].dropna())))
                     target_names = [label_mapping.get(int(i), f"Kelas {i}") for i in unique_classes]
                     
-                    # Hitung Akurasi
-                    acc = accuracy_score(df_clean['aktual'], df_clean['deteksi'])
-                    
-                    # Generate Matriks Image (PNG)
-                    fig, ax = plt.subplots(figsize=(8, 6))
+                    # 1. Hitung Confusion Matrix Dasar
                     cm_data = confusion_matrix(df_clean['aktual'], df_clean['deteksi'], labels=unique_classes)
+                    
+                    # 2. Kalkulasi Metrik Global (Overall, Expected Agreement, Kappa)
+                    po = accuracy_score(df_clean['aktual'], df_clean['deteksi']) # Overall Accuracy
+                    total_samples = np.sum(cm_data)
+                    sum_rows = np.sum(cm_data, axis=1) # Baris = Aktual
+                    sum_cols = np.sum(cm_data, axis=0) # Kolom = Deteksi
+                    
+                    # Expected Agreement (Pe)
+                    pe = np.sum((sum_rows * sum_cols) / (total_samples ** 2))
+                    
+                    # Kappa Coefficient
+                    kappa = (po - pe) / (1 - pe) if pe != 1 else 1.0
+                    
+                    # 3. Generate Matriks Image (PNG)
+                    fig, ax = plt.subplots(figsize=(8, 6))
                     sns.heatmap(cm_data, annot=True, fmt='d', cmap='Blues', 
                                 xticklabels=target_names, yticklabels=target_names, ax=ax)
                     ax.set_xlabel("Prediksi Model (Deteksi)")
@@ -530,11 +542,19 @@ elif menu == "📊 Evaluasi Akurasi (Confusion Matrix)":
                     fig.savefig(png_buffer, format="png", dpi=300)
                     png_buffer.seek(0)
                     
-                    # Classification Report
+                    # 4. Classification Report (Translasi ke Istilah Geospasial)
                     report_dict = classification_report(df_clean['aktual'], df_clean['deteksi'], 
                                                         labels=unique_classes, target_names=target_names, 
                                                         output_dict=True, zero_division=0)
                     df_report = pd.DataFrame(report_dict).transpose()
+                    
+                    # Rename kolom ke terminologi Pemetaan / Remote Sensing
+                    df_report.rename(columns={
+                        'precision': "User's Acc (Precision)",
+                        'recall': "Producer's Acc (Recall)",
+                        'f1-score': "F1-Score",
+                        'support': "Support (Jumlah)"
+                    }, inplace=True)
                     
                     # Generate Excel Bawaan Laporan
                     excel_eval_buffer = io.BytesIO()
@@ -549,13 +569,15 @@ elif menu == "📊 Evaluasi Akurasi (Confusion Matrix)":
                         fig.savefig(cm_path, format="png", dpi=300)
                         
                         pdf_path = os.path.join(tmpdir, "Evaluasi_Laporan.pdf")
-                        generate_pdf_eval_report(df_report.copy(), acc, cm_path, pdf_path)
+                        generate_pdf_eval_report(df_report.copy(), po, cm_path, pdf_path)
                         
                         with open(pdf_path, "rb") as f:
                             pdf_eval_bytes = f.read()
 
                     # Simpan State
-                    st.session_state.eval_acc = acc
+                    st.session_state.eval_po = po
+                    st.session_state.eval_pe = pe
+                    st.session_state.eval_kappa = kappa
                     st.session_state.eval_df_report = df_report
                     st.session_state.eval_png = png_buffer.getvalue()
                     st.session_state.eval_excel = excel_eval_buffer.getvalue()
@@ -574,25 +596,39 @@ elif menu == "📊 Evaluasi Akurasi (Confusion Matrix)":
         st.success(f"✅ Berhasil memuat {st.session_state.eval_jumlah_data} baris data valid untuk dievaluasi.")
         st.divider()
         
-        col1, col2 = st.columns([1.5, 1])
-        with col1:
-            st.markdown("### 📊 Heatmap Confusion Matrix")
-            st.image(st.session_state.eval_png, use_container_width=True)
-            
-        with col2:
-            st.markdown("### 📈 Ringkasan Metrik")
-            st.metric("Overall Accuracy (Akurasi Total)", f"{st.session_state.eval_acc:.2%}")
-            st.info(
-                "**Cara Membaca Matriks:**\n"
-                "- **Diagonal utama** menunjukkan jumlah prediksi yang *benar*.\n"
-                "- **Di luar diagonal** menunjukkan kesalahan (Missclassification)."
-            )
+        # --- METRIK GLOBAL ---
+        st.markdown("### 📈 Ringkasan Metrik Akurasi Global")
+        metrik_col1, metrik_col2, metrik_col3 = st.columns(3)
+        metrik_col1.metric("Overall Accuracy (Po)", f"{st.session_state.eval_po:.2%}")
+        metrik_col2.metric("Expected Agreement (Pe)", f"{st.session_state.eval_pe:.4f}")
+        
+        # Menentukan status reliabilitas Kappa
+        kappa_val = st.session_state.eval_kappa
+        if kappa_val > 0.80: kappa_status = "Sangat Kuat"
+        elif kappa_val > 0.60: kappa_status = "Kuat"
+        elif kappa_val > 0.40: kappa_status = "Moderat"
+        elif kappa_val > 0.20: kappa_status = "Cukup"
+        else: kappa_status = "Lemah"
+        
+        metrik_col3.metric("Kappa Coefficient", f"{kappa_val:.4f}", f"Reliabilitas: {kappa_status}")
         
         st.divider()
-        st.markdown("### 📋 Laporan Klasifikasi Detail (Classification Report)")
+        
+        # --- MATRIKS CONFUSION ---
+        st.markdown("### 📊 Heatmap Confusion Matrix")
+        st.image(st.session_state.eval_png, use_container_width=False)
+        
+        st.divider()
+        
+        # --- LAPORAN PER KELAS ---
+        st.markdown("### 📋 Laporan Klasifikasi Detail (Per Kelas)")
+        st.caption("Catatan: User's Accuracy identik dengan Precision. Producer's Accuracy identik dengan Recall.")
         
         df_display = st.session_state.eval_df_report.style.format({
-            "precision": "{:.2f}", "recall": "{:.2f}", "f1-score": "{:.2f}", "support": "{:.0f}"
+            "User's Acc (Precision)": "{:.2f}", 
+            "Producer's Acc (Recall)": "{:.2f}", 
+            "F1-Score": "{:.2f}", 
+            "Support (Jumlah)": "{:.0f}"
         })
         st.dataframe(df_display, use_container_width=True)
         

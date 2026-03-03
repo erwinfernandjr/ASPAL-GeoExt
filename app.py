@@ -109,8 +109,6 @@ def generate_pdf_report(df_rekap, pdf_path):
 def get_random_points_gdf(gdf, n_points, epsg_code):
     """Mencari titik acak yang jatuh TEPAT DI DALAM poligon shapefile secara efisien"""
     gdf = gdf.to_crs(epsg=epsg_code)
-    
-    # Pastikan tidak memproses geometri yang kosong/rusak
     gdf = gdf[~gdf.geometry.is_empty & gdf.geometry.is_valid]
     points = []
     
@@ -118,28 +116,20 @@ def get_random_points_gdf(gdf, n_points, epsg_code):
 
     geometries = gdf.geometry.tolist()
     attempts = 0
-    max_attempts = n_points * 200 # Batas aman
+    max_attempts = n_points * 200 # Batas aman loop
     
     while len(points) < n_points and attempts < max_attempts:
-        # 1. Pilih 1 poligon secara acak dari dataset (misal: acak dari 62 pothole)
         poly = random.choice(geometries)
-        
-        # 2. Dapatkan bounding box HANYA dari poligon tersebut (area pencarian super kecil)
         minx, miny, maxx, maxy = poly.bounds
-        
-        # 3. Generate titik acak di dalam kotak kecil tersebut
         p = Point(random.uniform(minx, maxx), random.uniform(miny, maxy))
-        
-        # 4. Pastikan titik berada tepat di dalam poligon (bukan cuma di kotaknya)
         if poly.contains(p):
             points.append(p)
-            
         attempts += 1
         
     return points
 
 def get_random_points_raster(raster_path, n_points, epsg_code):
-    """Mencari titik acak dari area valid Orthomosaic (bukan NoData/Background hitam)"""
+    """Mencari titik acak dari area valid Orthomosaic"""
     points = []
     with rasterio.open(raster_path) as src:
         bounds = src.bounds
@@ -147,27 +137,36 @@ def get_random_points_raster(raster_path, n_points, epsg_code):
         nodata = src.nodata
         
         attempts = 0
-        max_attempts = n_points * 100
+        max_attempts = n_points * 200
         
         while len(points) < n_points and attempts < max_attempts:
             x = random.uniform(bounds.left, bounds.right)
             y = random.uniform(bounds.bottom, bounds.top)
-            
             try:
-                # Cek piksel di koordinat tersebut
                 val = next(src.sample([(x, y)]))
-                # Pastikan bukan Nodata dan bukan full 0 (hitam)
                 if (nodata is None or val[0] != nodata) and np.any(val > 0):
                     points.append(Point(x, y))
             except:
                 pass
             attempts += 1
             
-    # Konversi ke CRS target jika berbeda
     if points:
         gdf_temp = gpd.GeoDataFrame(geometry=points, crs=raster_crs)
         return gdf_temp.to_crs(epsg=epsg_code).geometry.tolist()
     return []
+
+def assign_deteksi_class(class_name):
+    """Mapping atribut kelas sesuai ketentuan VB Script Field Calculator"""
+    mapping = {
+        "Alligator Crack": 1,
+        "Edge Crack": 2,
+        "Longitudinal Crack": 3,
+        "Patching": 4,
+        "Potholes": 5,
+        "Rutting": 6,
+        "Non-Distress": 7
+    }
+    return mapping.get(class_name, 0)
 
 # ==========================================
 # 3. SIDEBAR & NAVIGASI
@@ -221,9 +220,9 @@ if menu == "📏 Ekstraksi Geometri Kerusakan":
 
     if st.button("🚀 Ekstrak Geometri", type="primary", use_container_width=True):
         konfigurasi_input = {
-            "Alligator_Crack": {"file": file_ac, "kebutuhan_dsm": False},
-            "Edge_Crack": {"file": file_ec, "kebutuhan_dsm": False},
-            "Longitudinal_Crack": {"file": file_lc, "kebutuhan_dsm": False},
+            "Alligator Crack": {"file": file_ac, "kebutuhan_dsm": False},
+            "Edge Crack": {"file": file_ec, "kebutuhan_dsm": False},
+            "Longitudinal Crack": {"file": file_lc, "kebutuhan_dsm": False},
             "Potholes": {"file": file_pt, "kebutuhan_dsm": True},
             "Patching": {"file": file_pa, "kebutuhan_dsm": False},
             "Rutting": {"file": file_rt, "kebutuhan_dsm": True}
@@ -255,10 +254,10 @@ if menu == "📏 Ekstraksi Geometri Kerusakan":
                                 gdf = hitung_geometri_dasar(gdf)
                                 gdf["Kedalaman_m"] = 0.0
                                 if butuh_dsm and dsm_path: gdf = hitung_kedalaman(gdf, dsm_path)
-                                gdf["Jenis_Kerusakan"] = jk.replace("_", " ")
+                                gdf["Jenis_Kerusakan"] = jk
                                 hasil_gdf_list.append(gdf)
                                 rekap_data.append({
-                                    "Jenis Kerusakan": jk.replace("_", " "), "Total Objek": len(gdf),
+                                    "Jenis Kerusakan": jk, "Total Objek": len(gdf),
                                     "Rata P (m)": round(gdf["Panjang_m"].mean(), 3), "Rata L (m)": round(gdf["Lebar_m"].mean(), 3),
                                     "Rata D (m)": round(gdf["Diameter_m"].mean(), 3), "Total Luas (m²)": round(gdf["Luas_m2"].sum(), 3),
                                     "Rata Z (m)": round(gdf["Kedalaman_m"].mean(), 3) if butuh_dsm and dsm_path else "-"
@@ -303,7 +302,7 @@ if menu == "📏 Ekstraksi Geometri Kerusakan":
 # ==========================================
 elif menu == "🎯 Random Sampling (Ground Truth)":
     st.subheader("Modul Generator Sampel Acak")
-    st.info("Pilih jumlah sampel (titik) yang ingin Anda hasilkan secara acak dari masing-masing klasifikasi kerusakan serta area sehat (Orthomosaic).")
+    st.info("Pilih jumlah sampel yang diinginkan. Sistem akan secara otomatis menambahkan kolom atribut [deteksi] dan [aktual] untuk kemudahan validasi di QGIS/ArcGIS.")
     
     if 'sampling_selesai' not in st.session_state: st.session_state.sampling_selesai = False
 
@@ -323,12 +322,23 @@ elif menu == "🎯 Random Sampling (Ground Truth)":
             file_rt_s = st.file_uploader("Rutting", type="zip", key="rt_s")
 
     with col_samp2:
-        st.markdown("**2. Orthomosaic (Area Sehat/Background)**")
+        st.markdown("**2. Area Sehat (Non-Distress)**")
         st.caption("Digunakan untuk mengekstrak titik acak sebagai kelas negatif (jalan sehat).")
-        ortho_mode = st.radio("Input Orthomosaic:", ["Paste Link Google Drive", "Upload File .tif"], key="ortho_m")
-        ortho_file = None; ortho_link = ""
-        if ortho_mode == "Upload File .tif": ortho_file = st.file_uploader("Upload Ortho (.tif)", type="tif", key="ortho_f")
-        else: ortho_link = st.text_input("Link Drive Ortho (.tif)", key="ortho_l")
+        
+        bg_mode = st.radio("Metode Input Area Sehat:", ["Gunakan Poligon AOI (.zip)", "Gunakan Orthomosaic (.tif)"])
+        
+        aoi_bg_file = None
+        ortho_file = None
+        ortho_link = ""
+        
+        if bg_mode == "Gunakan Poligon AOI (.zip)":
+            aoi_bg_file = st.file_uploader("Upload SHP Area Sehat (.zip)", type="zip", key="aoi_bg")
+        else:
+            ortho_mode = st.radio("Sumber Ortho:", ["Paste Link Google Drive", "Upload File .tif"], key="ortho_m")
+            if ortho_mode == "Upload File .tif":
+                ortho_file = st.file_uploader("Upload Ortho (.tif)", type="tif", key="ortho_f")
+            else:
+                ortho_link = st.text_input("Link Drive Ortho (.tif)", key="ortho_l")
 
     if st.button("🎯 Buat Random Sample", type="primary", use_container_width=True):
         konfigurasi_sampling = {
@@ -340,7 +350,7 @@ elif menu == "🎯 Random Sampling (Ground Truth)":
             "Rutting": file_rt_s
         }
         
-        with st.spinner(f"Mencari {n_samples} titik acak dari masing-masing input..."):
+        with st.spinner(f"Mencari titik acak untuk Ground Truth Validation..."):
             with tempfile.TemporaryDirectory() as tmpdir:
                 try:
                     kumpulan_titik = []
@@ -355,27 +365,41 @@ elif menu == "🎯 Random Sampling (Ground Truth)":
                                 for p in points:
                                     kumpulan_titik.append({"Class": jenis, "geometry": p})
 
-                    # 2. Proses Raster / Orthomosaic (Background)
-                    is_ortho_valid = (ortho_mode == "Upload File .tif" and ortho_file is not None) or (ortho_mode == "Paste Link Google Drive" and ortho_link != "")
-                    if is_ortho_valid:
-                        ortho_path = os.path.join(tmpdir, "ortho.tif")
-                        if ortho_mode == "Upload File .tif":
-                            with open(ortho_path, "wb") as f: f.write(ortho_file.getbuffer())
-                        else:
-                            import gdown, re
-                            match = re.search(r"/d/([a-zA-Z0-9_-]+)", ortho_link)
-                            if match: gdown.download(id=match.group(1), output=ortho_path, quiet=False)
-                        
-                        points_bg = get_random_points_raster(ortho_path, n_samples, epsg_code)
-                        for p in points_bg:
-                            kumpulan_titik.append({"Class": "Background_Sehat", "geometry": p})
+                    # 2. Proses Area Non-Distress (Background)
+                    points_bg = []
+                    if bg_mode == "Gunakan Poligon AOI (.zip)":
+                        if aoi_bg_file is not None:
+                            aoi_gdf = read_zip_shapefile(aoi_bg_file, tmpdir)
+                            if aoi_gdf is not None and not aoi_gdf.empty:
+                                points_bg = get_random_points_gdf(aoi_gdf, n_samples, epsg_code)
+                    else:
+                        is_ortho_valid = (ortho_mode == "Upload File .tif" and ortho_file is not None) or (ortho_mode == "Paste Link Google Drive" and ortho_link != "")
+                        if is_ortho_valid:
+                            ortho_path = os.path.join(tmpdir, "ortho.tif")
+                            if ortho_mode == "Upload File .tif":
+                                with open(ortho_path, "wb") as f: f.write(ortho_file.getbuffer())
+                            else:
+                                import gdown, re
+                                match = re.search(r"/d/([a-zA-Z0-9_-]+)", ortho_link)
+                                if match: gdown.download(id=match.group(1), output=ortho_path, quiet=False)
+                            
+                            points_bg = get_random_points_raster(ortho_path, n_samples, epsg_code)
+                            
+                    for p in points_bg:
+                        kumpulan_titik.append({"Class": "Non-Distress", "geometry": p})
 
                     if not kumpulan_titik:
-                        st.error("❌ Tidak ada input yang dimasukkan.")
+                        st.error("❌ Tidak ada input shapefile yang dimasukkan.")
                         st.stop()
 
-                    # Jadikan GeoDataFrame Gabungan
+                    # 3. Jadikan GeoDataFrame & Tambahkan Atribut Evaluasi
                     gdf_sample = gpd.GeoDataFrame(kumpulan_titik, crs=f"EPSG:{epsg_code}")
+                    
+                    # Menambahkan kolom deteksi sesuai urutan kelas (1 - 7)
+                    gdf_sample["deteksi"] = gdf_sample["Class"].apply(assign_deteksi_class)
+                    
+                    # Menambahkan kolom aktual (dikosongkan untuk diisi manual oleh enumerator/user)
+                    gdf_sample["aktual"] = ""
                     
                     # Generate Statistik 
                     stat_sample = gdf_sample["Class"].value_counts().reset_index()
@@ -394,17 +418,17 @@ elif menu == "🎯 Random Sampling (Ground Truth)":
                     st.session_state.sampling_selesai = False
 
     if st.session_state.get('sampling_selesai', False):
-        st.success("✅ Titik acak (Random Samples) berhasil digenerate!")
-        st.markdown("Berikut adalah ringkasan sampel yang berhasil diekstrak (Mungkin ada yang kurang dari target jika area poligonnya sangat kecil):")
+        st.success("✅ Titik acak (Random Samples) beserta atribut klasifikasi berhasil dibuat!")
         
         st.dataframe(st.session_state.df_stat_samp, use_container_width=True, hide_index=True)
+        
+        st.info("💡 **Catatan Format Output:** File GPKG yang diunduh sudah dilengkapi dengan kolom **[deteksi]** (diisi otomatis dengan kode 1-7) dan kolom **[aktual]** yang dibiarkan kosong untuk diinput manual di lapangan/studio.")
         
         st.download_button(
             "🗺️ Download Shapefile GPKG Titik Sampel", 
             data=st.session_state.gpkg_bytes_samp, 
-            file_name="Random_Samples.gpkg", 
+            file_name="GroundTruth_Samples.gpkg", 
             mime="application/geopackage+sqlite3", 
             type="primary", 
             use_container_width=True
         )
-

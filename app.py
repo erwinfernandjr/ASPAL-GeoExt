@@ -6,6 +6,7 @@ import os
 import zipfile
 import tempfile
 import random
+import math
 from shapely.geometry import Point, LineString
 import rasterio
 from rasterstats import zonal_stats
@@ -27,7 +28,6 @@ st.set_page_config(page_title="ASPAL GeoExt", page_icon="📐", layout="wide")
 # 2. FUNGSI SPASIAL (SHARED)
 # ==========================================
 def read_zip_shapefile(uploaded_file, tmpdir):
-    """Membaca file shapefile dari dalam format .zip"""
     zip_path = os.path.join(tmpdir, uploaded_file.name)
     with open(zip_path, "wb") as f:
         f.write(uploaded_file.getbuffer())
@@ -106,65 +106,45 @@ def generate_pdf_report(df_rekap, pdf_path):
 # ==========================================
 # FUNGSI MODUL RANDOM SAMPLING
 # ==========================================
-def get_random_points_gdf(gdf, n_points, epsg_code, is_background=False):
-    """
-    Mencari titik acak di dalam poligon shapefile.
-    is_background=False -> Kerusakan: Hanya 1 sampel per Poligon ID unik. (Max n_points)
-    is_background=True  -> Area Sehat: Boleh banyak titik di dalam 1 Poligon raksasa.
-    """
-    gdf = gdf.to_crs(epsg=epsg_code)
-    gdf = gdf[~gdf.geometry.is_empty & gdf.geometry.is_valid]
+def get_random_points_gdf(gdf, target_n, is_background=False):
+    """Mencari titik acak di dalam poligon shapefile (sudah di-reproject)."""
     points = []
-    
-    if gdf.empty: return []
+    if gdf.empty or target_n <= 0: return []
 
     geometries = gdf.geometry.tolist()
     
     if is_background:
-        # Jika Area Sehat: Boleh mengulang poligon yang sama agar target sampel (n_points) tercapai
         attempts = 0
-        max_attempts = n_points * 200 # Batas aman loop
-        
-        while len(points) < n_points and attempts < max_attempts:
+        max_attempts = target_n * 200 
+        while len(points) < target_n and attempts < max_attempts:
             poly = random.choice(geometries)
             minx, miny, maxx, maxy = poly.bounds
             p = Point(random.uniform(minx, maxx), random.uniform(miny, maxy))
             if poly.contains(p):
                 points.append(p)
             attempts += 1
-            
     else:
-        # Jika Kerusakan: 1 Sampel = 1 Poligon (Unique).
-        # Tentukan target sampel berdasarkan ketersediaan poligon. Jika minta 50 tapi poligon ada 4, ambil 4.
-        target_n = min(n_points, len(geometries))
-        
-        # Pilih secara acak poligon tanpa duplikasi
-        selected_polys = random.sample(geometries, target_n)
-        
+        actual_n = min(target_n, len(geometries))
+        selected_polys = random.sample(geometries, actual_n)
         for poly in selected_polys:
             minx, miny, maxx, maxy = poly.bounds
             poly_attempts = 0
-            # Usaha mencari 1 titik acak TEPAT di dalam poligon tersebut
             while poly_attempts < 100: 
                 p = Point(random.uniform(minx, maxx), random.uniform(miny, maxy))
                 if poly.contains(p):
                     points.append(p)
-                    break # Berhasil dapat 1, lanjut ke poligon/ID berikutnya
+                    break 
                 poly_attempts += 1
-                
     return points
 
 def get_random_points_raster(raster_path, n_points, epsg_code):
-    """Mencari titik acak dari area valid Orthomosaic"""
     points = []
     with rasterio.open(raster_path) as src:
         bounds = src.bounds
         raster_crs = src.crs
         nodata = src.nodata
-        
         attempts = 0
         max_attempts = n_points * 200
-        
         while len(points) < n_points and attempts < max_attempts:
             x = random.uniform(bounds.left, bounds.right)
             y = random.uniform(bounds.bottom, bounds.top)
@@ -182,15 +162,9 @@ def get_random_points_raster(raster_path, n_points, epsg_code):
     return []
 
 def assign_deteksi_class(class_name):
-    """Mapping atribut kelas ke integer ID untuk Field Calculator"""
     mapping = {
-        "Alligator Crack": 1,
-        "Edge Crack": 2,
-        "Longitudinal Crack": 3,
-        "Patching": 4,
-        "Potholes": 5,
-        "Rutting": 6,
-        "Non-Distress": 7
+        "Alligator Crack": 1, "Edge Crack": 2, "Longitudinal Crack": 3,
+        "Patching": 4, "Potholes": 5, "Rutting": 6, "Non-Distress": 7
     }
     return mapping.get(class_name, 0)
 
@@ -328,11 +302,39 @@ if menu == "📏 Ekstraksi Geometri Kerusakan":
 # ==========================================
 elif menu == "🎯 Random Sampling (Ground Truth)":
     st.subheader("Modul Generator Sampel Acak")
-    st.info("Pilih jumlah titik maksimal per kelas. Jika jumlah fitur poligon kurang dari target, sistem hanya akan mengambil 1 sampel di setiap poligon yang ada untuk mencegah redudansi/kebocoran data validasi.")
     
     if 'sampling_selesai' not in st.session_state: st.session_state.sampling_selesai = False
 
-    n_samples = st.number_input("Tentukan Target Maksimal Sampel Titik per Kelas", min_value=1, max_value=1000, value=50, step=10)
+    st.markdown("### 🧮 Metode Penentuan Jumlah Sampel")
+    metode_sampling = st.selectbox(
+        "Pilih pendekatan kalkulasi sampel untuk kelas kerusakan:",
+        ["Input Manual", "Rumus Slovin", "Aturan Roscoe", "Persentase Populasi"]
+    )
+
+    n_manual = 50
+    e_slovin = 0.05
+    p_persen = 0.10
+
+    if metode_sampling == "Input Manual":
+        st.info("💡 **Input Manual:** Anda menetapkan target angka pasti. Jika poligon kerusakan lebih sedikit dari target, semua poligon akan diambil.")
+        n_manual = st.number_input("Target Maksimal Sampel Titik per Kelas", min_value=1, value=50)
+    
+    elif metode_sampling == "Rumus Slovin":
+        st.info("💡 **Rumus Slovin:** Ukuran sampel dihitung dinamis berdasarkan populasi ($N$) tiap jenis kerusakan. $n = N / (1 + N \cdot e^2)$")
+        e_input = st.number_input("Batas Toleransi Error / Margin of Error (%)", min_value=1, max_value=50, value=5)
+        e_slovin = e_input / 100.0
+        
+    elif metode_sampling == "Aturan Roscoe":
+        st.info("💡 **Aturan Roscoe (1975):** Ukuran sampel minimum yang layak untuk penelitian adalah 30 per kategori/kelas.")
+        st.caption("Sistem akan secara otomatis menetapkan target maksimal sebanyak 30 sampel per kelas.")
+        n_manual = 30 
+        
+    elif metode_sampling == "Persentase Populasi":
+        st.info("💡 **Persentase:** Mengambil sekian persen dari total populasi ($N$) tiap jenis kerusakan.")
+        p_input = st.number_input("Persentase Sampel dari Populasi (%)", min_value=1, max_value=100, value=10)
+        p_persen = p_input / 100.0
+
+    st.divider()
     
     col_samp1, col_samp2 = st.columns([1.5, 1])
     with col_samp1:
@@ -349,57 +351,69 @@ elif menu == "🎯 Random Sampling (Ground Truth)":
 
     with col_samp2:
         st.markdown("**2. Area Sehat (Non-Distress)**")
-        st.caption("Digunakan untuk mengekstrak titik acak sebagai kelas negatif (jalan sehat).")
+        st.caption("Target sampel area sehat akan disamakan dengan sampel terbanyak dari kelas kerusakan agar seimbang.")
         
         bg_mode = st.radio("Metode Input Area Sehat:", ["Gunakan Poligon AOI (.zip)", "Gunakan Orthomosaic (.tif)"])
-        
-        aoi_bg_file = None
-        ortho_file = None
-        ortho_link = ""
+        aoi_bg_file = None; ortho_file = None; ortho_link = ""
         
         if bg_mode == "Gunakan Poligon AOI (.zip)":
             aoi_bg_file = st.file_uploader("Upload SHP Area Sehat (.zip)", type="zip", key="aoi_bg")
         else:
             ortho_mode = st.radio("Sumber Ortho:", ["Paste Link Google Drive", "Upload File .tif"], key="ortho_m")
-            if ortho_mode == "Upload File .tif":
-                ortho_file = st.file_uploader("Upload Ortho (.tif)", type="tif", key="ortho_f")
-            else:
-                ortho_link = st.text_input("Link Drive Ortho (.tif)", key="ortho_l")
+            if ortho_mode == "Upload File .tif": ortho_file = st.file_uploader("Upload Ortho (.tif)", type="tif", key="ortho_f")
+            else: ortho_link = st.text_input("Link Drive Ortho (.tif)", key="ortho_l")
 
-    if st.button("🎯 Buat Random Sample", type="primary", use_container_width=True):
+    if st.button("🎯 Generate Random Sample", type="primary", use_container_width=True):
         konfigurasi_sampling = {
-            "Alligator Crack": file_ac_s,
-            "Edge Crack": file_ec_s,
-            "Longitudinal Crack": file_lc_s,
-            "Potholes": file_pt_s,
-            "Patching": file_pa_s,
-            "Rutting": file_rt_s
+            "Alligator Crack": file_ac_s, "Edge Crack": file_ec_s, "Longitudinal Crack": file_lc_s,
+            "Potholes": file_pt_s, "Patching": file_pa_s, "Rutting": file_rt_s
         }
         
-        with st.spinner(f"Mengekstrak maksimal {n_samples} sampel unik (1 per poligon) untuk Ground Truth..."):
+        with st.spinner("Mengeksekusi algoritma sampling terarah..."):
             with tempfile.TemporaryDirectory() as tmpdir:
                 try:
                     kumpulan_titik = []
+                    max_distress_samples = 0 # Variabel untuk menyimpan target background
                     
-                    # 1. Proses Vector / Kerusakan (Maks 1 sampel per poligon)
+                    # 1. Proses Vector / Kerusakan
                     for jenis, file in konfigurasi_sampling.items():
                         if file is not None:
                             gdf = read_zip_shapefile(file, tmpdir)
                             if gdf is not None and not gdf.empty:
                                 if gdf.crs is None: gdf.set_crs(epsg=4326, inplace=True)
-                                # is_background=False: memastikan 1 poligon unik hanya dapat 1 titik
-                                points = get_random_points_gdf(gdf, n_samples, epsg_code, is_background=False)
-                                for p in points:
-                                    kumpulan_titik.append({"Class": jenis, "geometry": p})
+                                gdf = gdf.to_crs(epsg=epsg_code)
+                                
+                                # Filter geometri kosong
+                                gdf_valid = gdf[~gdf.geometry.is_empty & gdf.geometry.is_valid]
+                                N_pop = len(gdf_valid)
+                                
+                                # KALKULASI TARGET BERDASARKAN METODE
+                                if metode_sampling in ["Input Manual", "Aturan Roscoe"]:
+                                    target_n = n_manual
+                                elif metode_sampling == "Rumus Slovin":
+                                    target_n = math.ceil(N_pop / (1 + (N_pop * (e_slovin**2)))) if N_pop > 0 else 0
+                                elif metode_sampling == "Persentase Populasi":
+                                    target_n = math.ceil(N_pop * p_persen)
+                                
+                                # Catat nilai sampel terbesar untuk penyeimbang Area Sehat
+                                actual_samples_taken = min(target_n, N_pop)
+                                if actual_samples_taken > max_distress_samples:
+                                    max_distress_samples = actual_samples_taken
+                                
+                                points = get_random_points_gdf(gdf_valid, target_n, is_background=False)
+                                for p in points: kumpulan_titik.append({"Class": jenis, "geometry": p})
 
                     # 2. Proses Area Non-Distress (Background)
                     points_bg = []
+                    # Jika tidak ada distress, default bg target ke 50 atau n_manual
+                    target_bg = max_distress_samples if max_distress_samples > 0 else (n_manual if metode_sampling in ["Input Manual", "Aturan Roscoe"] else 50)
+                    
                     if bg_mode == "Gunakan Poligon AOI (.zip)":
                         if aoi_bg_file is not None:
                             aoi_gdf = read_zip_shapefile(aoi_bg_file, tmpdir)
                             if aoi_gdf is not None and not aoi_gdf.empty:
-                                # is_background=True: titik boleh bergerombol menuhin N titik walau hanya di 1-2 poligon besar
-                                points_bg = get_random_points_gdf(aoi_gdf, n_samples, epsg_code, is_background=True)
+                                aoi_gdf = aoi_gdf.to_crs(epsg=epsg_code)
+                                points_bg = get_random_points_gdf(aoi_gdf, target_bg, is_background=True)
                     else:
                         is_ortho_valid = (ortho_mode == "Upload File .tif" and ortho_file is not None) or (ortho_mode == "Paste Link Google Drive" and ortho_link != "")
                         if is_ortho_valid:
@@ -411,30 +425,25 @@ elif menu == "🎯 Random Sampling (Ground Truth)":
                                 match = re.search(r"/d/([a-zA-Z0-9_-]+)", ortho_link)
                                 if match: gdown.download(id=match.group(1), output=ortho_path, quiet=False)
                             
-                            points_bg = get_random_points_raster(ortho_path, n_samples, epsg_code)
+                            points_bg = get_random_points_raster(ortho_path, target_bg, epsg_code)
                             
                     for p in points_bg:
                         kumpulan_titik.append({"Class": "Non-Distress", "geometry": p})
 
                     if not kumpulan_titik:
-                        st.error("❌ Tidak ada input shapefile yang dimasukkan.")
+                        st.error("❌ Tidak ada input yang dimasukkan atau diproses.")
                         st.stop()
 
-                    # 3. Jadikan GeoDataFrame & Tambahkan Atribut Evaluasi
+                    # 3. Jadikan GeoDataFrame & Atribut Validasi
                     gdf_sample = gpd.GeoDataFrame(kumpulan_titik, crs=f"EPSG:{epsg_code}")
-                    
-                    # Menambahkan kolom deteksi sesuai urutan kelas (1 - 7)
                     gdf_sample["deteksi"] = gdf_sample["Class"].apply(assign_deteksi_class)
-                    
-                    # Menambahkan kolom aktual (dikosongkan untuk diisi manual oleh enumerator/user)
                     gdf_sample["aktual"] = ""
                     
                     # Generate Statistik 
                     stat_sample = gdf_sample["Class"].value_counts().reset_index()
-                    stat_sample.columns = ["Kelas / Kategori", "Jumlah Sampel Didapat"]
+                    stat_sample.columns = ["Kelas / Kategori", "Jumlah Sampel Diekstrak"]
                     
-                    # Export ke GPKG
-                    gpkg_samp_path = os.path.join(tmpdir, "Random_Sample_GroundTruth.gpkg")
+                    gpkg_samp_path = os.path.join(tmpdir, "GroundTruth_Samples.gpkg")
                     gdf_sample.to_file(gpkg_samp_path, driver="GPKG")
                     
                     st.session_state.df_stat_samp = stat_sample
@@ -442,21 +451,13 @@ elif menu == "🎯 Random Sampling (Ground Truth)":
                     st.session_state.sampling_selesai = True
                     
                 except Exception as e:
-                    st.error(f"❌ Kesalahan saat sampling: {e}")
-                    st.session_state.sampling_selesai = False
+                    st.error(f"❌ Kesalahan: {e}"); st.session_state.sampling_selesai = False
 
     if st.session_state.get('sampling_selesai', False):
-        st.success("✅ Titik acak (Random Samples) beserta atribut klasifikasi berhasil dibuat!")
-        
+        st.success("✅ Generasi Random Samples berhasil!")
         st.dataframe(st.session_state.df_stat_samp, use_container_width=True, hide_index=True)
-        
-        st.info("💡 **Catatan Format Output:** File GPKG yang diunduh sudah dilengkapi dengan kolom **[deteksi]** (diisi otomatis dengan kode 1-7) dan kolom **[aktual]** yang dibiarkan kosong untuk diinput manual di lapangan/studio.")
-        
         st.download_button(
-            "🗺️ Download Shapefile GPKG Titik Sampel", 
-            data=st.session_state.gpkg_bytes_samp, 
-            file_name="GroundTruth_Samples.gpkg", 
-            mime="application/geopackage+sqlite3", 
-            type="primary", 
-            use_container_width=True
+            "🗺️ Download GPKG Titik Sampel", data=st.session_state.gpkg_bytes_samp, 
+            file_name="GroundTruth_Samples.gpkg", mime="application/geopackage+sqlite3", 
+            type="primary", use_container_width=True
         )

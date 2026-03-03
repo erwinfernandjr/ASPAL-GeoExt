@@ -14,3 +14,6 @@ xlsxwriter
 scipy
 contextily
 matplotlib-scalebar
+scikit-learn
+seaborn
+openpyxl

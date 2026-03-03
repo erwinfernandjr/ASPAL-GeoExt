@@ -180,7 +180,15 @@ with col_input1:
 with col_input2:
     st.subheader("🗺️ 2. Input Data Kedalaman")
     st.warning("Data **Digital Surface Model (DSM)** diperlukan untuk mengekstrak dimensi kedalaman pada kerusakan tipe *Potholes* dan *Rutting*.")
-    dsm_file = st.file_uploader("Upload DSM (.tif)", type="tif")
+    
+    dsm_mode = st.radio("Cara Input Data DSM:", ["Paste Link Google Drive", "Upload File .tif"])
+    dsm_file = None
+    dsm_link = ""
+    
+    if dsm_mode == "Upload File .tif":
+        dsm_file = st.file_uploader("Upload Data DSM (.tif)", type="tif")
+    else:
+        dsm_link = st.text_input("Paste Link Shareable Google Drive (.tif)", placeholder="https://drive.google.com/file/d/...")
 
 st.markdown("<br>", unsafe_allow_html=True)
 
@@ -200,12 +208,23 @@ if st.button("🚀 Ekstrak Geometri Kerusakan", type="primary", use_container_wi
     with st.spinner("Mengaktifkan modul spasial ASPAL GeoExt... Memproses perhitungan geometri..."):
         with tempfile.TemporaryDirectory() as tmpdir:
             try:
-                # Simpan DSM jika ada
+                # Menyiapkan file DSM dari Link atau Upload
                 dsm_path = None
-                if dsm_file:
+                is_dsm_valid = (dsm_mode == "Upload File .tif" and dsm_file is not None) or (dsm_mode == "Paste Link Google Drive" and dsm_link != "")
+                
+                if is_dsm_valid:
                     dsm_path = os.path.join(tmpdir, "dsm.tif")
-                    with open(dsm_path, "wb") as f:
-                        f.write(dsm_file.getbuffer())
+                    if dsm_mode == "Upload File .tif":
+                        with open(dsm_path, "wb") as f:
+                            f.write(dsm_file.getbuffer())
+                    else:
+                        import gdown, re
+                        match = re.search(r"/d/([a-zA-Z0-9_-]+)", dsm_link)
+                        if match:
+                            gdown.download(id=match.group(1), output=dsm_path, quiet=False)
+                        else:
+                            st.error("❌ Link Google Drive tidak valid. Kedalaman tidak dapat diekstrak.")
+                            dsm_path = None
 
                 hasil_gdf_list = []
                 rekap_data = []
@@ -233,7 +252,7 @@ if st.button("🚀 Ekstrak Geometri Kerusakan", type="primary", use_container_wi
                                 if dsm_path:
                                     gdf = hitung_kedalaman(gdf, dsm_path)
                                 else:
-                                    st.warning(f"⚠️ Data DSM tidak diunggah. Nilai Kedalaman untuk {jenis_kerusakan.replace('_', ' ')} otomatis di-set ke 0.")
+                                    st.warning(f"⚠️ Data DSM tidak tersedia atau gagal dimuat. Nilai Kedalaman untuk {jenis_kerusakan.replace('_', ' ')} otomatis di-set ke 0.")
                             
                             gdf["Jenis_Kerusakan"] = jenis_kerusakan.replace("_", " ")
                             hasil_gdf_list.append(gdf)
@@ -246,7 +265,7 @@ if st.button("🚀 Ekstrak Geometri Kerusakan", type="primary", use_container_wi
                                 "Rata Lebar (m)": round(gdf["Lebar_m"].mean(), 3),
                                 "Rata Diameter (m)": round(gdf["Diameter_m"].mean(), 3),
                                 "Total Luas (m²)": round(gdf["Luas_m2"].sum(), 3),
-                                "Rata Kedalaman (m)": round(gdf["Kedalaman_m"].mean(), 3) if butuh_dsm else "-"
+                                "Rata Kedalaman (m)": round(gdf["Kedalaman_m"].mean(), 3) if butuh_dsm and dsm_path else "-"
                             })
 
                 if not hasil_gdf_list:

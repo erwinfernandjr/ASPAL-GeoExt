@@ -481,6 +481,38 @@ elif menu == "📊 Evaluasi Akurasi (Confusion Matrix)":
     st.subheader("Modul Evaluasi Akurasi (Confusion Matrix)")
     st.markdown("Unggah file Excel hasil survei lapangan yang telah diisi nilainya pada kolom **'aktual'**.")
     
+    # --- TAMBAHAN PANDUAN & TEMPLATE UNTUK PEMULA ---
+    with st.expander("💡 Klik untuk melihat Contoh Format Excel & Download Template"):
+        st.markdown(
+            "Sistem mewajibkan adanya kolom **`deteksi`** (hasil prediksi model) dan **`aktual`** (kebenaran dari lapangan). "
+            "Isilah kolom **`aktual`** dengan angka **1 hingga 7** sesuai keterangan kelas kerusakan."
+        )
+        
+        # Bikin DataFrame Contoh
+        contoh_df = pd.DataFrame({
+            "FID": [0, 1, 2, 3, 4],
+            "Class": ["Alligator Crack", "Edge Crack", "Potholes", "Rutting", "Non-Distress"],
+            "deteksi": [1, 2, 5, 6, 7],
+            "aktual": [1, 2, 7, 6, 7] 
+        })
+        
+        # Tampilkan tabel contoh
+        st.dataframe(contoh_df, use_container_width=True, hide_index=True)
+        st.caption("*Catatan: Pada baris ke-3 (Potholes), nilai aktual diisi 7 (Non-Distress) yang berarti model salah mendeteksi di titik tersebut.*")
+        
+        # Buat file template Excel di memori untuk diunduh
+        template_buffer = io.BytesIO()
+        with pd.ExcelWriter(template_buffer, engine='xlsxwriter') as writer:
+            contoh_df.to_excel(writer, index=False)
+            
+        st.download_button(
+            label="📥 Download Template Excel",
+            data=template_buffer.getvalue(),
+            file_name="Template_Evaluasi.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
+    # ------------------------------------------------
+
     if 'eval_selesai' not in st.session_state: st.session_state.eval_selesai = False
 
     # Izinkan xls dan xlsx
@@ -493,7 +525,7 @@ elif menu == "📊 Evaluasi Akurasi (Confusion Matrix)":
                     df = pd.read_excel(file_eval)
                     
                     if 'deteksi' not in df.columns or 'aktual' not in df.columns:
-                        st.error("❌ File Excel harus memiliki kolom 'deteksi' dan 'aktual'. Pastikan format sesuai dengan output Modul Sampling.")
+                        st.error("❌ File Excel harus memiliki setidaknya kolom bernama 'deteksi' dan 'aktual'. Silakan download template sebagai panduan.")
                         st.stop()
                     
                     df_clean = df.dropna(subset=['aktual', 'deteksi']).copy()
@@ -502,7 +534,7 @@ elif menu == "📊 Evaluasi Akurasi (Confusion Matrix)":
                     df_clean = df_clean.dropna(subset=['aktual', 'deteksi']) 
                     
                     if df_clean.empty:
-                        st.warning("⚠️ Tidak ada data valid untuk dievaluasi. Pastikan kolom 'aktual' di Excel sudah Anda isi dengan angka (1-7).")
+                        st.warning("⚠️ Tidak ada data valid untuk dievaluasi. Pastikan kolom 'aktual' di Excel sudah Anda ketik dengan angka (1-7).")
                         st.stop()
 
                     label_mapping = {
@@ -517,15 +549,12 @@ elif menu == "📊 Evaluasi Akurasi (Confusion Matrix)":
                     cm_data = confusion_matrix(df_clean['aktual'], df_clean['deteksi'], labels=unique_classes)
                     
                     # 2. Kalkulasi Metrik Global (Overall, Expected Agreement, Kappa)
-                    po = accuracy_score(df_clean['aktual'], df_clean['deteksi']) # Overall Accuracy
+                    po = accuracy_score(df_clean['aktual'], df_clean['deteksi']) 
                     total_samples = np.sum(cm_data)
-                    sum_rows = np.sum(cm_data, axis=1) # Baris = Aktual
-                    sum_cols = np.sum(cm_data, axis=0) # Kolom = Deteksi
+                    sum_rows = np.sum(cm_data, axis=1) 
+                    sum_cols = np.sum(cm_data, axis=0) 
                     
-                    # Expected Agreement (Pe)
                     pe = np.sum((sum_rows * sum_cols) / (total_samples ** 2))
-                    
-                    # Kappa Coefficient
                     kappa = (po - pe) / (1 - pe) if pe != 1 else 1.0
                     
                     # 3. Generate Matriks Image (PNG)
@@ -548,7 +577,6 @@ elif menu == "📊 Evaluasi Akurasi (Confusion Matrix)":
                                                         output_dict=True, zero_division=0)
                     df_report = pd.DataFrame(report_dict).transpose()
                     
-                    # Rename kolom ke terminologi Pemetaan / Remote Sensing
                     df_report.rename(columns={
                         'precision': "User's Acc (Precision)",
                         'recall': "Producer's Acc (Recall)",

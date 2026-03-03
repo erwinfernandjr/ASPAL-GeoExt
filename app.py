@@ -14,10 +14,16 @@ import io
 
 # Import untuk ReportLab (PDF)
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
+from reportlab.platypus import Image as RLImage
 from reportlab.lib import colors
 from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import inch
+
+# Import untuk Evaluasi Akurasi
+import matplotlib.pyplot as plt
+import seaborn as sns
+from sklearn.metrics import confusion_matrix, classification_report, accuracy_score
 
 # =========================================
 # 1. KONFIGURASI HALAMAN UTAMA
@@ -25,7 +31,7 @@ from reportlab.lib.units import inch
 st.set_page_config(page_title="ASPAL GeoExt", page_icon="📐", layout="wide")
 
 # ==========================================
-# 2. FUNGSI SPASIAL (SHARED)
+# 2. FUNGSI SPASIAL & BANTUAN
 # ==========================================
 def read_zip_shapefile(uploaded_file, tmpdir):
     zip_path = os.path.join(tmpdir, uploaded_file.name)
@@ -40,9 +46,6 @@ def read_zip_shapefile(uploaded_file, tmpdir):
                 return gpd.read_file(os.path.join(root, file))
     return None
 
-# ==========================================
-# FUNGSI MODUL EKSTRAKSI GEOMETRI
-# ==========================================
 def hitung_geometri_dasar(gdf):
     gdf = gdf.copy()
     panjang, lebar, diameter, luas = [], [], [], []
@@ -103,14 +106,47 @@ def generate_pdf_report(df_rekap, pdf_path):
     ]))
     elements.append(t); doc.build(elements)
 
-# ==========================================
-# FUNGSI MODUL RANDOM SAMPLING
-# ==========================================
+def generate_pdf_eval_report(df_report, acc, cm_image_path, pdf_path):
+    doc = SimpleDocTemplate(pdf_path, pagesize=A4, rightMargin=30, leftMargin=30, topMargin=30, bottomMargin=30)
+    elements = []
+    styles = getSampleStyleSheet()
+    
+    elements.append(Paragraph("<b>LAPORAN EVALUASI AKURASI MODEL</b>", styles['Title']))
+    elements.append(Spacer(1, 0.2 * inch))
+    elements.append(Paragraph(f"<b>Overall Accuracy:</b> {acc:.2%}", styles['Heading3']))
+    elements.append(Spacer(1, 0.2 * inch))
+    
+    # Masukkan Gambar Confusion Matrix
+    if os.path.exists(cm_image_path):
+        elements.append(RLImage(cm_image_path, width=6*inch, height=4.5*inch))
+        elements.append(Spacer(1, 0.3 * inch))
+    
+    elements.append(Paragraph("<b>Detail Metrik Klasifikasi</b>", styles['Heading3']))
+    
+    # Siapkan tabel metrik
+    df_report = df_report.round(2)
+    df_report.reset_index(inplace=True)
+    df_report.rename(columns={'index': 'Kelas'}, inplace=True)
+    
+    tabel_data = [df_report.columns.tolist()] + df_report.values.tolist()
+    t = Table(tabel_data, colWidths=[1.5*inch, 1*inch, 1*inch, 1*inch, 1*inch])
+    t.setStyle(TableStyle([
+        ('BACKGROUND', (0,0), (-1,0), colors.HexColor("#1e293b")),
+        ('TEXTCOLOR', (0,0), (-1,0), colors.white),
+        ('ALIGN', (0,0), (-1,-1), 'CENTER'),
+        ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
+        ('FONTSIZE', (0,0), (-1,-1), 9),
+        ('BOTTOMPADDING', (0,0), (-1,0), 8),
+        ('GRID', (0,0), (-1,-1), 0.5, colors.grey),
+        ('BACKGROUND', (0,1), (-1,-1), colors.HexColor("#f8fafc"))
+    ]))
+    
+    elements.append(t)
+    doc.build(elements)
+
 def get_random_points_gdf(gdf, target_n, is_background=False):
-    """Mencari titik acak di dalam poligon shapefile (sudah di-reproject)."""
     points = []
     if gdf.empty or target_n <= 0: return []
-
     geometries = gdf.geometry.tolist()
     
     if is_background:
@@ -120,8 +156,7 @@ def get_random_points_gdf(gdf, target_n, is_background=False):
             poly = random.choice(geometries)
             minx, miny, maxx, maxy = poly.bounds
             p = Point(random.uniform(minx, maxx), random.uniform(miny, maxy))
-            if poly.contains(p):
-                points.append(p)
+            if poly.contains(p): points.append(p)
             attempts += 1
     else:
         actual_n = min(target_n, len(geometries))
@@ -152,8 +187,7 @@ def get_random_points_raster(raster_path, n_points, epsg_code):
                 val = next(src.sample([(x, y)]))
                 if (nodata is None or val[0] != nodata) and np.any(val > 0):
                     points.append(Point(x, y))
-            except:
-                pass
+            except: pass
             attempts += 1
             
     if points:
@@ -172,14 +206,15 @@ def assign_deteksi_class(class_name):
 # 3. SIDEBAR & NAVIGASI
 # ==========================================
 st.markdown("<h1 style='text-align: center; color: #4da6ff;'>📐 ASPAL GeoExt</h1>", unsafe_allow_html=True)
-st.markdown("<h4 style='text-align: center; color: #cbd5e1;'>Sistem Ekstraksi Geometri & Sampling Acak Berbasis GIS</h4>", unsafe_allow_html=True)
+st.markdown("<h4 style='text-align: center; color: #cbd5e1;'>Sistem Ekstraksi Geometri & Evaluasi Berbasis GIS</h4>", unsafe_allow_html=True)
 st.divider()
 
 with st.sidebar:
     st.header("🧭 Navigasi Modul")
     menu = st.radio("Pilih Modul:", [
         "📏 Ekstraksi Geometri Kerusakan",
-        "🎯 Random Sampling (Ground Truth)"
+        "🎯 Random Sampling (Ground Truth)",
+        "📊 Evaluasi Akurasi (Confusion Matrix)"
     ])
     
     st.divider()
@@ -311,24 +346,18 @@ elif menu == "🎯 Random Sampling (Ground Truth)":
         ["Input Manual", "Rumus Slovin", "Aturan Roscoe", "Persentase Populasi"]
     )
 
-    n_manual = 50
-    e_slovin = 0.05
-    p_persen = 0.10
+    n_manual = 50; e_slovin = 0.05; p_persen = 0.10
 
     if metode_sampling == "Input Manual":
         st.info("💡 **Input Manual:** Anda menetapkan target angka pasti. Jika poligon kerusakan lebih sedikit dari target, semua poligon akan diambil.")
         n_manual = st.number_input("Target Maksimal Sampel Titik per Kelas", min_value=1, value=50)
-    
     elif metode_sampling == "Rumus Slovin":
         st.info("💡 **Rumus Slovin:** Ukuran sampel dihitung dinamis berdasarkan populasi ($N$) tiap jenis kerusakan. $n = N / (1 + N \cdot e^2)$")
         e_input = st.number_input("Batas Toleransi Error / Margin of Error (%)", min_value=1, max_value=50, value=5)
         e_slovin = e_input / 100.0
-        
     elif metode_sampling == "Aturan Roscoe":
         st.info("💡 **Aturan Roscoe (1975):** Ukuran sampel minimum yang layak untuk penelitian adalah 30 per kategori/kelas.")
-        st.caption("Sistem akan secara otomatis menetapkan target maksimal sebanyak 30 sampel per kelas.")
         n_manual = 30 
-        
     elif metode_sampling == "Persentase Populasi":
         st.info("💡 **Persentase:** Mengambil sekian persen dari total populasi ($N$) tiap jenis kerusakan.")
         p_input = st.number_input("Persentase Sampel dari Populasi (%)", min_value=1, max_value=100, value=10)
@@ -351,8 +380,6 @@ elif menu == "🎯 Random Sampling (Ground Truth)":
 
     with col_samp2:
         st.markdown("**2. Area Sehat (Non-Distress)**")
-        st.caption("Target sampel area sehat akan disamakan dengan sampel terbanyak dari kelas kerusakan agar seimbang.")
-        
         bg_mode = st.radio("Metode Input Area Sehat:", ["Gunakan Poligon AOI (.zip)", "Gunakan Orthomosaic (.tif)"])
         aoi_bg_file = None; ortho_file = None; ortho_link = ""
         
@@ -373,39 +400,28 @@ elif menu == "🎯 Random Sampling (Ground Truth)":
             with tempfile.TemporaryDirectory() as tmpdir:
                 try:
                     kumpulan_titik = []
-                    max_distress_samples = 0 # Variabel untuk menyimpan target background
+                    max_distress_samples = 0
                     
-                    # 1. Proses Vector / Kerusakan
                     for jenis, file in konfigurasi_sampling.items():
                         if file is not None:
                             gdf = read_zip_shapefile(file, tmpdir)
                             if gdf is not None and not gdf.empty:
                                 if gdf.crs is None: gdf.set_crs(epsg=4326, inplace=True)
                                 gdf = gdf.to_crs(epsg=epsg_code)
-                                
-                                # Filter geometri kosong
                                 gdf_valid = gdf[~gdf.geometry.is_empty & gdf.geometry.is_valid]
                                 N_pop = len(gdf_valid)
                                 
-                                # KALKULASI TARGET BERDASARKAN METODE
-                                if metode_sampling in ["Input Manual", "Aturan Roscoe"]:
-                                    target_n = n_manual
-                                elif metode_sampling == "Rumus Slovin":
-                                    target_n = math.ceil(N_pop / (1 + (N_pop * (e_slovin**2)))) if N_pop > 0 else 0
-                                elif metode_sampling == "Persentase Populasi":
-                                    target_n = math.ceil(N_pop * p_persen)
+                                if metode_sampling in ["Input Manual", "Aturan Roscoe"]: target_n = n_manual
+                                elif metode_sampling == "Rumus Slovin": target_n = math.ceil(N_pop / (1 + (N_pop * (e_slovin**2)))) if N_pop > 0 else 0
+                                elif metode_sampling == "Persentase Populasi": target_n = math.ceil(N_pop * p_persen)
                                 
-                                # Catat nilai sampel terbesar untuk penyeimbang Area Sehat
                                 actual_samples_taken = min(target_n, N_pop)
-                                if actual_samples_taken > max_distress_samples:
-                                    max_distress_samples = actual_samples_taken
+                                if actual_samples_taken > max_distress_samples: max_distress_samples = actual_samples_taken
                                 
                                 points = get_random_points_gdf(gdf_valid, target_n, is_background=False)
                                 for p in points: kumpulan_titik.append({"Class": jenis, "geometry": p})
 
-                    # 2. Proses Area Non-Distress (Background)
                     points_bg = []
-                    # Jika tidak ada distress, default bg target ke 50 atau n_manual
                     target_bg = max_distress_samples if max_distress_samples > 0 else (n_manual if metode_sampling in ["Input Manual", "Aturan Roscoe"] else 50)
                     
                     if bg_mode == "Gunakan Poligon AOI (.zip)":
@@ -424,22 +440,18 @@ elif menu == "🎯 Random Sampling (Ground Truth)":
                                 import gdown, re
                                 match = re.search(r"/d/([a-zA-Z0-9_-]+)", ortho_link)
                                 if match: gdown.download(id=match.group(1), output=ortho_path, quiet=False)
-                            
                             points_bg = get_random_points_raster(ortho_path, target_bg, epsg_code)
                             
-                    for p in points_bg:
-                        kumpulan_titik.append({"Class": "Non-Distress", "geometry": p})
+                    for p in points_bg: kumpulan_titik.append({"Class": "Non-Distress", "geometry": p})
 
                     if not kumpulan_titik:
                         st.error("❌ Tidak ada input yang dimasukkan atau diproses.")
                         st.stop()
 
-                    # 3. Jadikan GeoDataFrame & Atribut Validasi
                     gdf_sample = gpd.GeoDataFrame(kumpulan_titik, crs=f"EPSG:{epsg_code}")
                     gdf_sample["deteksi"] = gdf_sample["Class"].apply(assign_deteksi_class)
                     gdf_sample["aktual"] = ""
                     
-                    # Generate Statistik 
                     stat_sample = gdf_sample["Class"].value_counts().reset_index()
                     stat_sample.columns = ["Kelas / Kategori", "Jumlah Sampel Diekstrak"]
                     
@@ -461,3 +473,135 @@ elif menu == "🎯 Random Sampling (Ground Truth)":
             file_name="GroundTruth_Samples.gpkg", mime="application/geopackage+sqlite3", 
             type="primary", use_container_width=True
         )
+
+# ==========================================
+# MODUL 3: EVALUASI AKURASI (CONFUSION MATRIX)
+# ==========================================
+elif menu == "📊 Evaluasi Akurasi (Confusion Matrix)":
+    st.subheader("Modul Evaluasi Akurasi (Confusion Matrix)")
+    st.markdown("Unggah file Excel hasil survei lapangan yang telah diisi nilainya pada kolom **'aktual'**.")
+    
+    if 'eval_selesai' not in st.session_state: st.session_state.eval_selesai = False
+
+    file_eval = st.file_uploader("Upload File Excel (.xlsx)", type=["xlsx"])
+    
+    if st.button("🎯 Proses Evaluasi Data", type="primary", use_container_width=True):
+        if file_eval is not None:
+            with st.spinner("Menghitung metrik dan membuat visualisasi..."):
+                try:
+                    df = pd.read_excel(file_eval)
+                    
+                    if 'deteksi' not in df.columns or 'aktual' not in df.columns:
+                        st.error("❌ File Excel harus memiliki kolom 'deteksi' dan 'aktual'. Pastikan format sesuai dengan output Modul Sampling.")
+                        st.stop()
+                    
+                    df_clean = df.dropna(subset=['aktual', 'deteksi']).copy()
+                    df_clean['deteksi'] = pd.to_numeric(df_clean['deteksi'], errors='coerce').astype('Int64')
+                    df_clean['aktual'] = pd.to_numeric(df_clean['aktual'], errors='coerce').astype('Int64')
+                    df_clean = df_clean.dropna(subset=['aktual', 'deteksi']) 
+                    
+                    if df_clean.empty:
+                        st.warning("⚠️ Tidak ada data valid untuk dievaluasi. Pastikan kolom 'aktual' di Excel sudah Anda isi dengan angka (1-7).")
+                        st.stop()
+
+                    label_mapping = {
+                        1: "Alligator Crack", 2: "Edge Crack", 3: "Longitudinal Crack",
+                        4: "Patching", 5: "Potholes", 6: "Rutting", 7: "Non-Distress"
+                    }
+                    
+                    unique_classes = sorted(list(set(df_clean['aktual'].dropna()) | set(df_clean['deteksi'].dropna())))
+                    target_names = [label_mapping.get(int(i), f"Kelas {i}") for i in unique_classes]
+                    
+                    # Hitung Akurasi
+                    acc = accuracy_score(df_clean['aktual'], df_clean['deteksi'])
+                    
+                    # Generate Matriks Image (PNG)
+                    fig, ax = plt.subplots(figsize=(8, 6))
+                    cm_data = confusion_matrix(df_clean['aktual'], df_clean['deteksi'], labels=unique_classes)
+                    sns.heatmap(cm_data, annot=True, fmt='d', cmap='Blues', 
+                                xticklabels=target_names, yticklabels=target_names, ax=ax)
+                    ax.set_xlabel("Prediksi Model (Deteksi)")
+                    ax.set_ylabel("Kebenaran Lapangan (Aktual)")
+                    plt.title("Confusion Matrix", pad=20)
+                    plt.xticks(rotation=45, ha='right')
+                    plt.tight_layout()
+                    
+                    png_buffer = io.BytesIO()
+                    fig.savefig(png_buffer, format="png", dpi=300)
+                    png_buffer.seek(0)
+                    
+                    # Classification Report
+                    report_dict = classification_report(df_clean['aktual'], df_clean['deteksi'], 
+                                                        labels=unique_classes, target_names=target_names, 
+                                                        output_dict=True, zero_division=0)
+                    df_report = pd.DataFrame(report_dict).transpose()
+                    
+                    # Generate Excel Bawaan Laporan
+                    excel_eval_buffer = io.BytesIO()
+                    with pd.ExcelWriter(excel_eval_buffer, engine='xlsxwriter') as writer:
+                        df_report.to_excel(writer, sheet_name='Classification_Report')
+                        df_clean.to_excel(writer, sheet_name='Data_Clean', index=False)
+                    excel_eval_buffer.seek(0)
+                    
+                    # Generate PDF Report
+                    with tempfile.TemporaryDirectory() as tmpdir:
+                        cm_path = os.path.join(tmpdir, "cm.png")
+                        fig.savefig(cm_path, format="png", dpi=300)
+                        
+                        pdf_path = os.path.join(tmpdir, "Evaluasi_Laporan.pdf")
+                        generate_pdf_eval_report(df_report.copy(), acc, cm_path, pdf_path)
+                        
+                        with open(pdf_path, "rb") as f:
+                            pdf_eval_bytes = f.read()
+
+                    # Simpan State
+                    st.session_state.eval_acc = acc
+                    st.session_state.eval_df_report = df_report
+                    st.session_state.eval_png = png_buffer.getvalue()
+                    st.session_state.eval_excel = excel_eval_buffer.getvalue()
+                    st.session_state.eval_pdf = pdf_eval_bytes
+                    st.session_state.eval_selesai = True
+                    st.session_state.eval_jumlah_data = len(df_clean)
+
+                except Exception as e:
+                    st.error(f"❌ Terjadi kesalahan saat memproses file: {e}")
+                    st.session_state.eval_selesai = False
+        else:
+            st.warning("⚠️ Harap unggah file Excel terlebih dahulu.")
+
+    # Tampilkan Hasil Evaluasi jika sukses
+    if st.session_state.get('eval_selesai', False):
+        st.success(f"✅ Berhasil memuat {st.session_state.eval_jumlah_data} baris data valid untuk dievaluasi.")
+        st.divider()
+        
+        col1, col2 = st.columns([1.5, 1])
+        with col1:
+            st.markdown("### 📊 Heatmap Confusion Matrix")
+            st.image(st.session_state.eval_png, use_container_width=True)
+            
+        with col2:
+            st.markdown("### 📈 Ringkasan Metrik")
+            st.metric("Overall Accuracy (Akurasi Total)", f"{st.session_state.eval_acc:.2%}")
+            st.info(
+                "**Cara Membaca Matriks:**\n"
+                "- **Diagonal utama** menunjukkan jumlah prediksi yang *benar*.\n"
+                "- **Di luar diagonal** menunjukkan kesalahan (Missclassification)."
+            )
+        
+        st.divider()
+        st.markdown("### 📋 Laporan Klasifikasi Detail (Classification Report)")
+        
+        df_display = st.session_state.eval_df_report.style.format({
+            "precision": "{:.2f}", "recall": "{:.2f}", "f1-score": "{:.2f}", "support": "{:.0f}"
+        })
+        st.dataframe(df_display, use_container_width=True)
+        
+        st.divider()
+        st.markdown("### 📥 Unduh Hasil Evaluasi")
+        col_dl1, col_dl2, col_dl3 = st.columns(3)
+        with col_dl1: 
+            st.download_button("🖼️ PNG Matriks", data=st.session_state.eval_png, file_name="Confusion_Matrix.png", mime="image/png", use_container_width=True)
+        with col_dl2: 
+            st.download_button("📊 Laporan Excel", data=st.session_state.eval_excel, file_name="Evaluasi_Metrik.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
+        with col_dl3: 
+            st.download_button("📄 Laporan PDF", data=st.session_state.eval_pdf, file_name="Evaluasi_Laporan.pdf", mime="application/pdf", use_container_width=True)

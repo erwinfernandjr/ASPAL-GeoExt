@@ -107,22 +107,33 @@ def generate_pdf_report(df_rekap, pdf_path):
 # FUNGSI MODUL RANDOM SAMPLING
 # ==========================================
 def get_random_points_gdf(gdf, n_points, epsg_code):
-    """Mencari titik acak yang jatuh TEPAT DI DALAM poligon shapefile"""
+    """Mencari titik acak yang jatuh TEPAT DI DALAM poligon shapefile secara efisien"""
     gdf = gdf.to_crs(epsg=epsg_code)
-    union_geom = gdf.geometry.union_all()
+    
+    # Pastikan tidak memproses geometri yang kosong/rusak
+    gdf = gdf[~gdf.geometry.is_empty & gdf.geometry.is_valid]
     points = []
     
-    # Jika geometri kosong
-    if union_geom.is_empty: return []
-    
-    minx, miny, maxx, maxy = union_geom.bounds
+    if gdf.empty: return []
+
+    geometries = gdf.geometry.tolist()
     attempts = 0
-    max_attempts = n_points * 100 # Batas aman agar tidak infinite loop
+    max_attempts = n_points * 200 # Batas aman
     
     while len(points) < n_points and attempts < max_attempts:
+        # 1. Pilih 1 poligon secara acak dari dataset (misal: acak dari 62 pothole)
+        poly = random.choice(geometries)
+        
+        # 2. Dapatkan bounding box HANYA dari poligon tersebut (area pencarian super kecil)
+        minx, miny, maxx, maxy = poly.bounds
+        
+        # 3. Generate titik acak di dalam kotak kecil tersebut
         p = Point(random.uniform(minx, maxx), random.uniform(miny, maxy))
-        if union_geom.contains(p):
+        
+        # 4. Pastikan titik berada tepat di dalam poligon (bukan cuma di kotaknya)
+        if poly.contains(p):
             points.append(p)
+            
         attempts += 1
         
     return points
@@ -396,3 +407,4 @@ elif menu == "🎯 Random Sampling (Ground Truth)":
             type="primary", 
             use_container_width=True
         )
+

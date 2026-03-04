@@ -594,11 +594,14 @@ elif menu == "📊 Evaluasi Akurasi (Confusion Matrix)":
                                                             output_dict=True, zero_division=0)
                         df_report = pd.DataFrame(report_dict).transpose()
                         
+                        for col in ['precision', 'recall', 'f1-score']:
+                            df_report[col] = df_report[col] * 100
+                            
                         df_report.rename(columns={
                             'precision': "Precision",
                             'recall': "Recall",
                             'f1-score': "F1-Score",
-                            'support': "Support (Jumlah)"
+                            'support': "Support"
                         }, inplace=True)
                         
                         # Generate Excel
@@ -670,10 +673,10 @@ elif menu == "📊 Evaluasi Akurasi (Confusion Matrix)":
         st.caption("Catatan: Precision identik dengan User's Accuracy. Recall identik dengan Producer's Accuracy.")
         
         df_display = st.session_state.eval_df_report.style.format({
-            "User's Acc (Precision)": "{:.2f}", 
-            "Producer's Acc (Recall)": "{:.2f}", 
-            "F1-Score": "{:.2f}", 
-            "Support (Jumlah)": "{:.0f}"
+            "Precision": "{:.2f}%", 
+            "Recall": "{:.2f}%", 
+            "F1-Score": "{:.2f}%", 
+            "Support": "{:.0f}"
         })
         st.dataframe(df_display, use_container_width=True)
         
@@ -686,3 +689,4 @@ elif menu == "📊 Evaluasi Akurasi (Confusion Matrix)":
             st.download_button("📊 Laporan Excel", data=st.session_state.eval_excel, file_name="Evaluasi_Metrik.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
         with col_dl3: 
             st.download_button("📄 Laporan PDF", data=st.session_state.eval_pdf, file_name="Evaluasi_Laporan.pdf", mime="application/pdf", use_container_width=True)
+

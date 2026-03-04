@@ -301,6 +301,12 @@ if menu == "📏 Ekstraksi Geometri Kerusakan":
                     if not hasil_gdf_list: st.error("❌ Tidak ada file Shapefile valid diunggah."); st.stop()
 
                     master_gdf = pd.concat(hasil_gdf_list, ignore_index=True)
+                    
+                    # TAMBAHAN SOLUSI: Hapus kolom fid bawaan yang menyebabkan duplikat
+                    cols_to_drop = [c for c in master_gdf.columns if c.lower() == 'fid']
+                    if cols_to_drop:
+                        master_gdf = master_gdf.drop(columns=cols_to_drop)
+                    
                     df_rekap = pd.DataFrame(rekap_data)
 
                     gpkg_path = os.path.join(tmpdir, "GeoExt_Hasil.gpkg")
@@ -689,4 +695,5 @@ elif menu == "📊 Evaluasi Akurasi (Confusion Matrix)":
             st.download_button("📊 Laporan Excel", data=st.session_state.eval_excel, file_name="Evaluasi_Metrik.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
         with col_dl3: 
             st.download_button("📄 Laporan PDF", data=st.session_state.eval_pdf, file_name="Evaluasi_Laporan.pdf", mime="application/pdf", use_container_width=True)
+
 

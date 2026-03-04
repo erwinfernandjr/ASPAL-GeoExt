@@ -578,8 +578,8 @@ elif menu == "📊 Evaluasi Akurasi (Confusion Matrix)":
                     df_report = pd.DataFrame(report_dict).transpose()
                     
                     df_report.rename(columns={
-                        'precision': "User's Acc (Precision)",
-                        'recall': "Producer's Acc (Recall)",
+                        'precision': "Precision",
+                        'recall': "Producer's Acc Recall",
                         'f1-score': "F1-Score",
                         'support': "Support (Jumlah)"
                     }, inplace=True)
@@ -669,3 +669,4 @@ elif menu == "📊 Evaluasi Akurasi (Confusion Matrix)":
             st.download_button("📊 Laporan Excel", data=st.session_state.eval_excel, file_name="Evaluasi_Metrik.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
         with col_dl3: 
             st.download_button("📄 Laporan PDF", data=st.session_state.eval_pdf, file_name="Evaluasi_Laporan.pdf", mime="application/pdf", use_container_width=True)
+

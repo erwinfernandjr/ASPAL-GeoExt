@@ -479,195 +479,128 @@ elif menu == "🎯 Random Sampling (Ground Truth)":
 # ==========================================
 elif menu == "📊 Evaluasi Akurasi (Confusion Matrix)":
     st.subheader("Modul Evaluasi Akurasi (Confusion Matrix)")
-    st.markdown("Unggah file Excel hasil survei lapangan yang telah diisi nilainya pada kolom **'aktual'**.")
+    st.markdown("Unggah file Excel hasil survei lapangan yang telah diisi nilainya pada kolom **'aktual'** dan **'deteksi'**.")
     
-    # --- TAMBAHAN PANDUAN & TEMPLATE UNTUK PEMULA ---
-    with st.expander("💡 Klik untuk melihat Contoh Format Excel & Download Template"):
-        st.markdown(
-            "Sistem mewajibkan adanya kolom **`deteksi`** (hasil prediksi model) dan **`aktual`** (kebenaran dari lapangan). "
-            "Isilah kolom **`aktual`** dengan angka **1 hingga 7** sesuai keterangan kelas kerusakan."
-        )
-        
-        # Bikin DataFrame Contoh
-        contoh_df = pd.DataFrame({
-            "FID": [0, 1, 2, 3, 4],
-            "Class": ["Alligator Crack", "Edge Crack", "Potholes", "Rutting", "Non-Distress"],
-            "deteksi": [1, 2, 5, 6, 7],
-            "aktual": [1, 2, 7, 6, 7] 
-        })
-        
-        # Tampilkan tabel contoh
-        st.dataframe(contoh_df, use_container_width=True, hide_index=True)
-        st.caption("*Catatan: Pada baris ke-3 (Potholes), nilai aktual diisi 7 (Non-Distress) yang berarti model salah mendeteksi di titik tersebut.*")
-        
-        # Buat file template Excel di memori untuk diunduh
-        template_buffer = io.BytesIO()
-        with pd.ExcelWriter(template_buffer, engine='xlsxwriter') as writer:
-            contoh_df.to_excel(writer, index=False)
-            
-        st.download_button(
-            label="📥 Download Template Excel",
-            data=template_buffer.getvalue(),
-            file_name="Template_Evaluasi.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        )
-    # ------------------------------------------------
-
     if 'eval_selesai' not in st.session_state: st.session_state.eval_selesai = False
 
     # Izinkan xls dan xlsx
     file_eval = st.file_uploader("Upload File Excel (.xls, .xlsx)", type=["xls", "xlsx"])
     
-    if st.button("🎯 Proses Evaluasi Data", type="primary", use_container_width=True):
-        if file_eval is not None:
-            with st.spinner("Menghitung metrik geospasial dan membuat visualisasi..."):
-                try:
-                    df = pd.read_excel(file_eval)
-                    
-                    if 'deteksi' not in df.columns or 'aktual' not in df.columns:
-                        st.error("❌ File Excel harus memiliki setidaknya kolom bernama 'deteksi' dan 'aktual'. Silakan download template sebagai panduan.")
-                        st.stop()
-                    
-                    df_clean = df.dropna(subset=['aktual', 'deteksi']).copy()
-                    df_clean['deteksi'] = pd.to_numeric(df_clean['deteksi'], errors='coerce').astype('Int64')
-                    df_clean['aktual'] = pd.to_numeric(df_clean['aktual'], errors='coerce').astype('Int64')
-                    df_clean = df_clean.dropna(subset=['aktual', 'deteksi']) 
-                    
-                    if df_clean.empty:
-                        st.warning("⚠️ Tidak ada data valid untuk dievaluasi. Pastikan kolom 'aktual' di Excel sudah Anda ketik dengan angka (1-7).")
-                        st.stop()
+    if file_eval is not None:
+        # 1. BACA FILE TERLEBIH DAHULU UNTUK MENDETEKSI ANGKA KELAS
+        try:
+            df = pd.read_excel(file_eval)
+            if 'deteksi' not in df.columns or 'aktual' not in df.columns:
+                st.error("❌ File Excel harus memiliki setidaknya kolom bernama 'deteksi' dan 'aktual'.")
+                st.stop()
+                
+            df_clean = df.dropna(subset=['aktual', 'deteksi']).copy()
+            df_clean['deteksi'] = pd.to_numeric(df_clean['deteksi'], errors='coerce').astype('Int64')
+            df_clean['aktual'] = pd.to_numeric(df_clean['aktual'], errors='coerce').astype('Int64')
+            df_clean = df_clean.dropna(subset=['aktual', 'deteksi']) 
+            
+            if df_clean.empty:
+                st.warning("⚠️ Tidak ada data valid untuk dievaluasi. Pastikan kolom 'aktual' dan 'deteksi' berisi angka.")
+                st.stop()
 
-                    label_mapping = {
-                        1: "Alligator Crack", 2: "Edge Crack", 3: "Longitudinal Crack",
-                        4: "Patching", 5: "Potholes", 6: "Rutting", 7: "Non-Distress"
-                    }
-                    
-                    unique_classes = sorted(list(set(df_clean['aktual'].dropna()) | set(df_clean['deteksi'].dropna())))
-                    target_names = [label_mapping.get(int(i), f"Kelas {i}") for i in unique_classes]
-                    
-                    # 1. Hitung Confusion Matrix Dasar
-                    cm_data = confusion_matrix(df_clean['aktual'], df_clean['deteksi'], labels=unique_classes)
-                    
-                    # 2. Kalkulasi Metrik Global (Overall, Expected Agreement, Kappa)
-                    po = accuracy_score(df_clean['aktual'], df_clean['deteksi']) 
-                    total_samples = np.sum(cm_data)
-                    sum_rows = np.sum(cm_data, axis=1) 
-                    sum_cols = np.sum(cm_data, axis=0) 
-                    
-                    pe = np.sum((sum_rows * sum_cols) / (total_samples ** 2))
-                    kappa = (po - pe) / (1 - pe) if pe != 1 else 1.0
-                    
-                    # 3. Generate Matriks Image (PNG)
-                    fig, ax = plt.subplots(figsize=(8, 6))
-                    sns.heatmap(cm_data, annot=True, fmt='d', cmap='Blues', 
-                                xticklabels=target_names, yticklabels=target_names, ax=ax)
-                    ax.set_xlabel("Prediksi Model (Deteksi)")
-                    ax.set_ylabel("Kebenaran Lapangan (Aktual)")
-                    plt.title("Confusion Matrix", pad=20)
-                    plt.xticks(rotation=45, ha='right')
-                    plt.tight_layout()
-                    
-                    png_buffer = io.BytesIO()
-                    fig.savefig(png_buffer, format="png", dpi=300)
-                    png_buffer.seek(0)
-                    
-                    # 4. Classification Report (Translasi ke Istilah Geospasial)
-                    report_dict = classification_report(df_clean['aktual'], df_clean['deteksi'], 
-                                                        labels=unique_classes, target_names=target_names, 
-                                                        output_dict=True, zero_division=0)
-                    df_report = pd.DataFrame(report_dict).transpose()
-                    
-                    df_report.rename(columns={
-                        'precision': "Precision",
-                        'recall': "Recall",
-                        'f1-score': "F1-Score",
-                        'support': "Support (Jumlah)"
-                    }, inplace=True)
-                    
-                    # Generate Excel Bawaan Laporan
-                    excel_eval_buffer = io.BytesIO()
-                    with pd.ExcelWriter(excel_eval_buffer, engine='xlsxwriter') as writer:
-                        df_report.to_excel(writer, sheet_name='Classification_Report')
-                        df_clean.to_excel(writer, sheet_name='Data_Clean', index=False)
-                    excel_eval_buffer.seek(0)
-                    
-                    # Generate PDF Report
-                    with tempfile.TemporaryDirectory() as tmpdir:
-                        cm_path = os.path.join(tmpdir, "cm.png")
-                        fig.savefig(cm_path, format="png", dpi=300)
+            # Cari angka unik dari gabungan kolom aktual dan deteksi
+            unique_classes = sorted(list(set(df_clean['aktual']) | set(df_clean['deteksi'])))
+            
+            st.divider()
+            st.markdown("### 🏷️ Definisikan Nama Kelas")
+            st.info("Kami mendeteksi angka-angka di bawah ini pada file Excel Anda. Silakan ketik nama kelas yang sesuai untuk masing-masing angka.")
+            
+            # 2. BUAT INPUT TEKS DINAMIS UNTUK SETIAP ANGKA
+            user_label_mapping = {}
+            cols = st.columns(min(len(unique_classes), 4)) # Tampilkan maksimal 4 kolom sejajar
+            for idx, cls_num in enumerate(unique_classes):
+                with cols[idx % len(cols)]:
+                    # Simpan input dari user ke dalam dictionary
+                    user_label_mapping[int(cls_num)] = st.text_input(
+                        f"Nama untuk angka {cls_num}:", 
+                        value=f"Kelas {cls_num}", # Nilai default
+                        key=f"map_{cls_num}"
+                    )
+            
+            st.divider()
+
+            # 3. TOMBOL PROSES EVALUASI
+            if st.button("🎯 Proses Evaluasi Data", type="primary", use_container_width=True):
+                with st.spinner("Menghitung metrik geospasial dan membuat visualisasi..."):
+                    try:
+                        # Buat daftar nama target berdasarkan inputan user
+                        target_names = [user_label_mapping.get(int(i), f"Kelas {i}") for i in unique_classes]
                         
-                        pdf_path = os.path.join(tmpdir, "Evaluasi_Laporan.pdf")
-                        generate_pdf_eval_report(df_report.copy(), po, cm_path, pdf_path)
+                        # Hitung Confusion Matrix Dasar
+                        cm_data = confusion_matrix(df_clean['aktual'], df_clean['deteksi'], labels=unique_classes)
                         
-                        with open(pdf_path, "rb") as f:
-                            pdf_eval_bytes = f.read()
+                        # Kalkulasi Metrik Global (Overall, Expected Agreement, Kappa)
+                        po = accuracy_score(df_clean['aktual'], df_clean['deteksi']) 
+                        total_samples = np.sum(cm_data)
+                        sum_rows = np.sum(cm_data, axis=1) 
+                        sum_cols = np.sum(cm_data, axis=0) 
+                        
+                        pe = np.sum((sum_rows * sum_cols) / (total_samples ** 2))
+                        kappa = (po - pe) / (1 - pe) if pe != 1 else 1.0
+                        
+                        # Generate Matriks Image (PNG)
+                        fig, ax = plt.subplots(figsize=(8, 6))
+                        sns.heatmap(cm_data, annot=True, fmt='d', cmap='Blues', 
+                                    xticklabels=target_names, yticklabels=target_names, ax=ax)
+                        ax.set_xlabel("Prediksi Model (Deteksi)")
+                        ax.set_ylabel("Kebenaran Lapangan (Aktual)")
+                        plt.title("Confusion Matrix", pad=20)
+                        plt.xticks(rotation=45, ha='right')
+                        plt.tight_layout()
+                        
+                        png_buffer = io.BytesIO()
+                        fig.savefig(png_buffer, format="png", dpi=300)
+                        png_buffer.seek(0)
+                        
+                        # Classification Report
+                        report_dict = classification_report(df_clean['aktual'], df_clean['deteksi'], 
+                                                            labels=unique_classes, target_names=target_names, 
+                                                            output_dict=True, zero_division=0)
+                        df_report = pd.DataFrame(report_dict).transpose()
+                        
+                        df_report.rename(columns={
+                            'precision': "Precision",
+                            'recall': "Recall",
+                            'f1-score': "F1-Score",
+                            'support': "Support (Jumlah)"
+                        }, inplace=True)
+                        
+                        # Generate Excel
+                        excel_eval_buffer = io.BytesIO()
+                        with pd.ExcelWriter(excel_eval_buffer, engine='xlsxwriter') as writer:
+                            df_report.to_excel(writer, sheet_name='Classification_Report')
+                            df_clean.to_excel(writer, sheet_name='Data_Clean', index=False)
+                        excel_eval_buffer.seek(0)
+                        
+                        # Generate PDF Report
+                        with tempfile.TemporaryDirectory() as tmpdir:
+                            cm_path = os.path.join(tmpdir, "cm.png")
+                            fig.savefig(cm_path, format="png", dpi=300)
+                            
+                            pdf_path = os.path.join(tmpdir, "Evaluasi_Laporan.pdf")
+                            generate_pdf_eval_report(df_report.copy(), po, cm_path, pdf_path)
+                            
+                            with open(pdf_path, "rb") as f:
+                                pdf_eval_bytes = f.read()
 
-                    # Simpan State
-                    st.session_state.eval_po = po
-                    st.session_state.eval_pe = pe
-                    st.session_state.eval_kappa = kappa
-                    st.session_state.eval_df_report = df_report
-                    st.session_state.eval_png = png_buffer.getvalue()
-                    st.session_state.eval_excel = excel_eval_buffer.getvalue()
-                    st.session_state.eval_pdf = pdf_eval_bytes
-                    st.session_state.eval_selesai = True
-                    st.session_state.eval_jumlah_data = len(df_clean)
+                        # Simpan State
+                        st.session_state.eval_po = po
+                        st.session_state.eval_pe = pe
+                        st.session_state.eval_kappa = kappa
+                        st.session_state.eval_df_report = df_report
+                        st.session_state.eval_png = png_buffer.getvalue()
+                        st.session_state.eval_excel = excel_eval_buffer.getvalue()
+                        st.session_state.eval_pdf = pdf_eval_bytes
+                        st.session_state.eval_selesai = True
+                        st.session_state.eval_jumlah_data = len(df_clean)
 
-                except Exception as e:
-                    st.error(f"❌ Terjadi kesalahan saat memproses file: {e}")
-                    st.session_state.eval_selesai = False
-        else:
-            st.warning("⚠️ Harap unggah file Excel terlebih dahulu.")
-
-    # Tampilkan Hasil Evaluasi jika sukses
-    if st.session_state.get('eval_selesai', False):
-        st.success(f"✅ Berhasil memuat {st.session_state.eval_jumlah_data} baris data valid untuk dievaluasi.")
-        st.divider()
-        
-        # --- METRIK GLOBAL ---
-        st.markdown("### 📈 Ringkasan Metrik Akurasi Global")
-        metrik_col1, metrik_col2, metrik_col3 = st.columns(3)
-        metrik_col1.metric("Overall Accuracy (Po)", f"{st.session_state.eval_po:.2%}")
-        metrik_col2.metric("Expected Agreement (Pe)", f"{st.session_state.eval_pe:.4f}")
-        
-        # Menentukan status reliabilitas Kappa
-        kappa_val = st.session_state.eval_kappa
-        if kappa_val > 0.80: kappa_status = "Sangat Kuat"
-        elif kappa_val > 0.60: kappa_status = "Kuat"
-        elif kappa_val > 0.40: kappa_status = "Moderat"
-        elif kappa_val > 0.20: kappa_status = "Cukup"
-        else: kappa_status = "Lemah"
-        
-        metrik_col3.metric("Kappa Coefficient", f"{kappa_val:.4f}", f"Reliabilitas: {kappa_status}")
-        
-        st.divider()
-        
-        # --- MATRIKS CONFUSION ---
-        st.markdown("### 📊 Heatmap Confusion Matrix")
-        st.image(st.session_state.eval_png, use_container_width=False)
-        
-        st.divider()
-        
-        # --- LAPORAN PER KELAS ---
-        st.markdown("### 📋 Laporan Klasifikasi Detail (Per Kelas)")
-        st.caption("Catatan: Precision identik dengan User's Accuracy . Recall identik dengan Producer's Accuracy.")
-        
-        df_display = st.session_state.eval_df_report.style.format({
-            "User's Acc (Precision)": "{:.2f}", 
-            "Producer's Acc (Recall)": "{:.2f}", 
-            "F1-Score": "{:.2f}", 
-            "Support (Jumlah)": "{:.0f}"
-        })
-        st.dataframe(df_display, use_container_width=True)
-        
-        st.divider()
-        st.markdown("### 📥 Unduh Hasil Evaluasi")
-        col_dl1, col_dl2, col_dl3 = st.columns(3)
-        with col_dl1: 
-            st.download_button("🖼️ PNG Matriks", data=st.session_state.eval_png, file_name="Confusion_Matrix.png", mime="image/png", use_container_width=True)
-        with col_dl2: 
-            st.download_button("📊 Laporan Excel", data=st.session_state.eval_excel, file_name="Evaluasi_Metrik.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
-        with col_dl3: 
-            st.download_button("📄 Laporan PDF", data=st.session_state.eval_pdf, file_name="Evaluasi_Laporan.pdf", mime="application/pdf", use_container_width=True)
-
-
+                    except Exception as e:
+                        st.error(f"❌ Terjadi kesalahan saat memproses data: {e}")
+                        st.session_state.eval_selesai = False
+        except Exception as e:
+            st.error(f"❌ Gagal membaca file Excel: {e}")

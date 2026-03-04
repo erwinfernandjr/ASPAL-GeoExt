@@ -579,7 +579,7 @@ elif menu == "📊 Evaluasi Akurasi (Confusion Matrix)":
                     
                     df_report.rename(columns={
                         'precision': "Precision",
-                        'recall': "Producer's Acc Recall",
+                        'recall': "Recall",
                         'f1-score': "F1-Score",
                         'support': "Support (Jumlah)"
                     }, inplace=True)
@@ -650,7 +650,7 @@ elif menu == "📊 Evaluasi Akurasi (Confusion Matrix)":
         
         # --- LAPORAN PER KELAS ---
         st.markdown("### 📋 Laporan Klasifikasi Detail (Per Kelas)")
-        st.caption("Catatan: User's Accuracy identik dengan Precision. Producer's Accuracy identik dengan Recall.")
+        st.caption("Catatan: Precision identik dengan User's Accuracy . Recall identik dengan Producer's Accuracy.")
         
         df_display = st.session_state.eval_df_report.style.format({
             "User's Acc (Precision)": "{:.2f}", 
@@ -669,4 +669,5 @@ elif menu == "📊 Evaluasi Akurasi (Confusion Matrix)":
             st.download_button("📊 Laporan Excel", data=st.session_state.eval_excel, file_name="Evaluasi_Metrik.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
         with col_dl3: 
             st.download_button("📄 Laporan PDF", data=st.session_state.eval_pdf, file_name="Evaluasi_Laporan.pdf", mime="application/pdf", use_container_width=True)
+
 

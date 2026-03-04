@@ -529,24 +529,27 @@ elif menu == "📊 Evaluasi Akurasi (Confusion Matrix)":
                         st.stop()
                     
                     df_clean = df.dropna(subset=['aktual', 'deteksi']).copy()
-                    
-                    # 1. PERBAIKAN: Ubah menjadi tipe string agar bisa membaca label asli dari Excel
-                    df_clean['deteksi'] = df_clean['deteksi'].astype(str).str.strip()
-                    df_clean['aktual'] = df_clean['aktual'].astype(str).str.strip()
+                    df_clean['deteksi'] = pd.to_numeric(df_clean['deteksi'], errors='coerce').astype('Int64')
+                    df_clean['aktual'] = pd.to_numeric(df_clean['aktual'], errors='coerce').astype('Int64')
+                    df_clean = df_clean.dropna(subset=['aktual', 'deteksi']) 
                     
                     if df_clean.empty:
-                        st.warning("⚠️ Tidak ada data valid untuk dievaluasi. Pastikan kolom 'aktual' dan 'deteksi' terisi.")
+                        st.warning("⚠️ Tidak ada data valid untuk dievaluasi. Pastikan kolom 'aktual' di Excel sudah Anda ketik dengan angka (1-7).")
                         st.stop()
 
-                    # 2. PERBAIKAN: Ambil langsung kelas unik dari data tanpa label_mapping kerusakan jalan
-                    unique_classes = sorted(list(set(df_clean['aktual']) | set(df_clean['deteksi'])))
-                    target_names = unique_classes # Gunakan teks asli dari excel sebagai label matriks
+                    label_mapping = {
+                        1: "Alligator Crack", 2: "Edge Crack", 3: "Longitudinal Crack",
+                        4: "Patching", 5: "Potholes", 6: "Rutting", 7: "Non-Distress"
+                    }
+                    
+                    unique_classes = sorted(list(set(df_clean['aktual'].dropna()) | set(df_clean['deteksi'].dropna())))
+                    target_names = [label_mapping.get(int(i), f"Kelas {i}") for i in unique_classes]
                     
                     # 1. Hitung Confusion Matrix Dasar
                     cm_data = confusion_matrix(df_clean['aktual'], df_clean['deteksi'], labels=unique_classes)
                     
                     # 2. Kalkulasi Metrik Global (Overall, Expected Agreement, Kappa)
-                    po = accuracy_score(df_clean['aktual'], df_clean['deteksi'])
+                    po = accuracy_score(df_clean['aktual'], df_clean['deteksi']) 
                     total_samples = np.sum(cm_data)
                     sum_rows = np.sum(cm_data, axis=1) 
                     sum_cols = np.sum(cm_data, axis=0) 
@@ -666,6 +669,5 @@ elif menu == "📊 Evaluasi Akurasi (Confusion Matrix)":
             st.download_button("📊 Laporan Excel", data=st.session_state.eval_excel, file_name="Evaluasi_Metrik.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
         with col_dl3: 
             st.download_button("📄 Laporan PDF", data=st.session_state.eval_pdf, file_name="Evaluasi_Laporan.pdf", mime="application/pdf", use_container_width=True)
-
 
 

@@ -481,6 +481,37 @@ elif menu == "📊 Evaluasi Akurasi (Confusion Matrix)":
     st.subheader("Modul Evaluasi Akurasi (Confusion Matrix)")
     st.markdown("Unggah file Excel hasil survei lapangan yang telah diisi nilainya pada kolom **'aktual'** dan **'deteksi'**.")
     
+    # --- TAMBAHAN PANDUAN & TEMPLATE UNTUK PEMULA ---
+    with st.expander("💡 Klik untuk melihat Contoh Format Excel & Download Template"):
+        st.markdown(
+            "Sistem mewajibkan adanya kolom **`deteksi`** (hasil prediksi model) dan **`aktual`** (kebenaran dari lapangan). "
+            "Isilah kolom tersebut dengan angka yang mewakili kelas Anda (misal: 1, 2, 3, 4)."
+        )
+        
+        # Bikin DataFrame Contoh
+        contoh_df = pd.DataFrame({
+            "FID": [0, 1, 2, 3, 4],
+            "deteksi": [1, 2, 3, 4, 1],
+            "aktual": [1, 2, 4, 4, 2] 
+        })
+        
+        # Tampilkan tabel contoh
+        st.dataframe(contoh_df, use_container_width=True, hide_index=True)
+        st.caption("*Catatan: Pastikan penamaan kolom ('aktual' dan 'deteksi') sama persis huruf kecil semua.*")
+        
+        # Buat file template Excel di memori untuk diunduh
+        template_buffer = io.BytesIO()
+        with pd.ExcelWriter(template_buffer, engine='xlsxwriter') as writer:
+            contoh_df.to_excel(writer, index=False)
+            
+        st.download_button(
+            label="📥 Download Template Excel",
+            data=template_buffer.getvalue(),
+            file_name="Template_Evaluasi.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
+    # ------------------------------------------------
+
     if 'eval_selesai' not in st.session_state: st.session_state.eval_selesai = False
 
     # Izinkan xls dan xlsx
@@ -604,3 +635,54 @@ elif menu == "📊 Evaluasi Akurasi (Confusion Matrix)":
                         st.session_state.eval_selesai = False
         except Exception as e:
             st.error(f"❌ Gagal membaca file Excel: {e}")
+
+    # Tampilkan Hasil Evaluasi jika sukses
+    if st.session_state.get('eval_selesai', False):
+        st.success(f"✅ Berhasil memuat {st.session_state.eval_jumlah_data} baris data valid untuk dievaluasi.")
+        st.divider()
+        
+        # --- METRIK GLOBAL ---
+        st.markdown("### 📈 Ringkasan Metrik Akurasi Global")
+        metrik_col1, metrik_col2, metrik_col3 = st.columns(3)
+        metrik_col1.metric("Overall Accuracy (Po)", f"{st.session_state.eval_po:.2%}")
+        metrik_col2.metric("Expected Agreement (Pe)", f"{st.session_state.eval_pe:.4f}")
+        
+        # Menentukan status reliabilitas Kappa
+        kappa_val = st.session_state.eval_kappa
+        if kappa_val > 0.80: kappa_status = "Sangat Kuat"
+        elif kappa_val > 0.60: kappa_status = "Kuat"
+        elif kappa_val > 0.40: kappa_status = "Moderat"
+        elif kappa_val > 0.20: kappa_status = "Cukup"
+        else: kappa_status = "Lemah"
+        
+        metrik_col3.metric("Kappa Coefficient", f"{kappa_val:.4f}", f"Reliabilitas: {kappa_status}")
+        
+        st.divider()
+        
+        # --- MATRIKS CONFUSION ---
+        st.markdown("### 📊 Heatmap Confusion Matrix")
+        st.image(st.session_state.eval_png, use_container_width=False)
+        
+        st.divider()
+        
+        # --- LAPORAN PER KELAS ---
+        st.markdown("### 📋 Laporan Klasifikasi Detail (Per Kelas)")
+        st.caption("Catatan: Precision identik dengan User's Accuracy. Recall identik dengan Producer's Accuracy.")
+        
+        df_display = st.session_state.eval_df_report.style.format({
+            "User's Acc (Precision)": "{:.2f}", 
+            "Producer's Acc (Recall)": "{:.2f}", 
+            "F1-Score": "{:.2f}", 
+            "Support (Jumlah)": "{:.0f}"
+        })
+        st.dataframe(df_display, use_container_width=True)
+        
+        st.divider()
+        st.markdown("### 📥 Unduh Hasil Evaluasi")
+        col_dl1, col_dl2, col_dl3 = st.columns(3)
+        with col_dl1: 
+            st.download_button("🖼️ PNG Matriks", data=st.session_state.eval_png, file_name="Confusion_Matrix.png", mime="image/png", use_container_width=True)
+        with col_dl2: 
+            st.download_button("📊 Laporan Excel", data=st.session_state.eval_excel, file_name="Evaluasi_Metrik.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
+        with col_dl3: 
+            st.download_button("📄 Laporan PDF", data=st.session_state.eval_pdf, file_name="Evaluasi_Laporan.pdf", mime="application/pdf", use_container_width=True)

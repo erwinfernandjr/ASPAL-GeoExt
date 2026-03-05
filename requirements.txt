@@ -17,3 +17,4 @@ matplotlib-scalebar
 scikit-learn
 seaborn
 openpyxl
+uuid

@@ -1,3 +1,4 @@
+import uuid
 import streamlit as st
 import geopandas as gpd
 import pandas as pd
@@ -34,15 +35,22 @@ st.set_page_config(page_title="ASPAL GeoExt", page_icon="📐", layout="wide")
 # 2. FUNGSI SPASIAL & BANTUAN
 # ==========================================
 def read_zip_shapefile(uploaded_file, tmpdir):
-    zip_path = os.path.join(tmpdir, uploaded_file.name)
+    # 1. Buat sub-folder unik agar file bernama sama tidak saling menimpa
+    unique_folder = os.path.join(tmpdir, str(uuid.uuid4()))
+    os.makedirs(unique_folder, exist_ok=True)
+    
+    zip_path = os.path.join(unique_folder, uploaded_file.name)
     with open(zip_path, "wb") as f:
         f.write(uploaded_file.getbuffer())
-    extract_dir = os.path.join(tmpdir, uploaded_file.name.replace('.zip', ''))
+        
+    extract_dir = os.path.join(unique_folder, "extracted")
     with zipfile.ZipFile(zip_path, 'r') as zip_ref:
         zip_ref.extractall(extract_dir)
+        
     for root, dirs, files in os.walk(extract_dir):
         for file in files:
-            if file.endswith(".shp"):
+            # 2. Pastikan file berakhiran .shp DAN bukan file tersembunyi MacOS (._)
+            if file.endswith(".shp") and not file.startswith("._"):
                 return gpd.read_file(os.path.join(root, file))
     return None
 
@@ -695,5 +703,6 @@ elif menu == "📊 Evaluasi Akurasi (Confusion Matrix)":
             st.download_button("📊 Laporan Excel", data=st.session_state.eval_excel, file_name="Evaluasi_Metrik.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
         with col_dl3: 
             st.download_button("📄 Laporan PDF", data=st.session_state.eval_pdf, file_name="Evaluasi_Laporan.pdf", mime="application/pdf", use_container_width=True)
+
 
 
